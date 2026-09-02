@@ -101,6 +101,17 @@ describe('what this package promises', () => {
     for (const name of ['LICENSE', 'README.md']) {
       expect((await stat(join(packageRoot, name))).size).toBeGreaterThan(0);
     }
+    // The README's licence badge is a fixed string, not a registry lookup. shields.io's npm
+    // endpoint renders "package not found" whenever its lookup fails, and that wrong answer
+    // then sits in GitHub's image cache long after the registry is healthy, so the badge was
+    // still reading "package not found" while the registry served MIT. A fixed badge cannot
+    // 404, but it also cannot notice a relicence, so the three have to be checked against each
+    // other here: the manifest, the LICENSE file, and the badge a reader actually sees.
+    expect(pkg.license).toBe('MIT');
+    const licence = await readFile(join(packageRoot, 'LICENSE'), 'utf8');
+    expect(licence.startsWith('MIT License')).toBe(true);
+    const readme = await readFile(join(packageRoot, 'README.md'), 'utf8');
+    expect(readme).toContain('license-MIT-blue');
   });
 
   it('gates publishing behind the checks', async () => {

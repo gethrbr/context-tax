@@ -8,7 +8,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/gethrbr/context-tax/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci)](https://github.com/gethrbr/context-tax/actions/workflows/ci.yml)
 [![dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen?style=flat-square)](#zero-dependencies-and-a-test-that-proves-it)
 [![node](https://img.shields.io/node/v/context-tax?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![license](https://img.shields.io/npm/l/context-tax?style=flat-square)](./LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
 
 ```bash
 npx context-tax
