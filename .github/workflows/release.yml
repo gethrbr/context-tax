@@ -1,5 +1,11 @@
 name: Release
 
+# Actions are pinned to commit SHAs, not tags. A tag is mutable: whoever controls the
+# action's repository can repoint v7 at different code, and every workflow that trusts
+# the tag runs it on the next push. That is the shape of most CI supply-chain attacks.
+# A SHA cannot be repointed. The trailing `# v7` is there so Dependabot can still see
+# what version the pin corresponds to and open a PR when a real release lands.
+
 # Publishes to npm when a GitHub release is published. Manual dispatch is kept for a
 # re-run after a transient registry failure; it will still refuse to publish a version
 # that is already on the registry, because npm rejects a duplicate version outright.
@@ -18,9 +24,9 @@ jobs:
       # check where it was built rather than taking the maintainer's word for it.
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
