@@ -1,0 +1,53 @@
+name: Release
+
+# Publishes to npm when a GitHub release is published. Manual dispatch is kept for a
+# re-run after a transient registry failure; it will still refuse to publish a version
+# that is already on the registry, because npm rejects a duplicate version outright.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance: the registry signs an attestation tying the
+      # tarball to this workflow run and this commit, so anybody installing it can
+      # check where it was built rather than taking the maintainer's word for it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - run: npm ci
+
+      # The tag and the manifest have to agree. A release tagged v0.2.0 that publishes
+      # 0.1.0 is worse than a failed release: it succeeds quietly and the tag lies.
+      - name: tag matches package.json
+        if: github.event_name == 'release'
+        run: |
+          manifest=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "manifest=$manifest tag=$tag"
+          test "$manifest" = "$tag"
+
+      # `prepublishOnly` runs typecheck, lint, the full suite and the build before the
+      # tarball is made, so this line is the whole gate. --access public is explicit
+      # rather than implied, so the package cannot become private by default later.
+      #
+      # NPM_TOKEN is a long-lived credential and the weakest part of this workflow.
+      # Once the package exists on the registry, configure a trusted publisher for it
+      # (npmjs.com > package > Settings > Trusted Publisher: this repo, this workflow
+      # file) and delete both the secret and the `env:` block below. npm then accepts
+      # the same OIDC identity that `id-token: write` already mints for provenance,
+      # and there is no token left to leak.
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,6 @@
+# `files` in package.json is the allowlist that decides the tarball. This file only
+# exists so that a stray local artefact can never ride along if that changes.
+src/
+.github/
+coverage/
+*.tgz

@@ -1,0 +1,71 @@
+{
+  "name": "context-tax",
+  "version": "0.1.0",
+  "description": "What your coding agent's context costs you every turn, and which of it you never used.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Roei Shoustak",
+  "homepage": "https://github.com/gethrbr/context-tax#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gethrbr/context-tax.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gethrbr/context-tax/issues"
+  },
+  "bin": {
+    "context-tax": "dist/index.js"
+  },
+  "main": "dist/api.js",
+  "types": "dist/api.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src eslint.config.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^22.10.1",
+    "@typescript-eslint/eslint-plugin": "^8.46.4",
+    "@typescript-eslint/parser": "^8.46.4",
+    "eslint": "^9.39.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "mcp",
+    "model-context-protocol",
+    "context",
+    "context-window",
+    "tokens",
+    "token-usage",
+    "llm",
+    "cli",
+    "agent",
+    "cost",
+    "ai-agents",
+    "developer-tools"
+  ]
+}

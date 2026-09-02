@@ -1,0 +1,68 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Typecheck and lint do not vary by Node version, so running them once on the
+  # matrix's ceiling is the same signal three times cheaper. It also stops the
+  # engines floor from dictating which linter this project may use: eslint 10 needs
+  # util.styleText, which Node 18 does not have, and that is a fact about the
+  # toolchain rather than about the package.
+  static:
+    name: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is what `engines` promises. Breaking it should fail here, not
+        # in somebody's `npx`.
+        node: ['18', '20', '22']
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      # The package promises zero runtime dependencies. Proving it here as well as in
+      # the suite means a dependency added in a PR cannot reach a release.
+      - name: no runtime dependencies
+        run: |
+          deps=$(node -p "JSON.stringify(require('./package.json').dependencies || {})")
+          echo "dependencies: $deps"
+          test "$deps" = "{}"
+
+      # The tarball is the artefact people actually get. A build that compiles but
+      # ships a bin that cannot start is a green CI and a broken release, so the
+      # packed tarball is installed into a clean directory and run.
+      - name: the tarball installs and runs
+        run: |
+          npm pack
+          mkdir -p /tmp/install-check && cd /tmp/install-check
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/context-tax-*.tgz
+          ./node_modules/.bin/context-tax --version
+          node -e "import('context-tax').then(m => { if (typeof m.buildLedger !== 'function') process.exit(1) })"
+          test "$(node -p "JSON.stringify(require('context-tax/package.json').dependencies||{})")" = "{}"

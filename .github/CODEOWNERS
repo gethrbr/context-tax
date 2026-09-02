@@ -1,0 +1,6 @@
+# Every file needs a review from the owner before it can be merged.
+#
+# This is the lever that makes "only I approve" real. A branch ruleset that merely
+# requires *an* approval is satisfied by any collaborator; requiring a Code Owner
+# review means an outside pull request cannot merge without the person named here.
+* @shoustak

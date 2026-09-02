@@ -1,0 +1,12 @@
+{
+  "//": "Publish build. The tests typecheck under tsconfig.json but must not reach the tarball: shipping them adds a third of the package for code nobody installing it will run, and puts vitest imports in a dependency-free bundle.",
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/__tests__"],
+  "compilerOptions": {
+    // Source maps are on for local development and off for the tarball. `files` in
+    // package.json ships dist and not src, so a published .js.map would point at a
+    // path that does not exist in the install: a third of the package weight for a
+    // reference that resolves to nothing.
+    "sourceMap": false
+  }
+}

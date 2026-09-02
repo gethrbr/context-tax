@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # Pinned actions go stale silently, and a stale action is the most common way a
+  # release workflow ends up running unmaintained code.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'chore(ci)'
+    groups:
+      actions:
+        patterns: ['*']
+
+  # devDependencies only: this package has no runtime dependencies, and CI fails if
+  # one ever appears.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      # Minor and patch bumps arrive as one reviewable PR. Majors are deliberately
+      # left out of the group: bundling four breaking releases onto one branch gives
+      # you a PR that fails CI as a unit and cannot tell you which of the four did
+      # it. Ungrouped, each major arrives on its own and CI names the culprit.
+      dev:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
