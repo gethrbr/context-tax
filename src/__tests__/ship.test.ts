@@ -89,7 +89,12 @@ describe('what this package promises', () => {
     const pkg = await manifest();
     expect(pkg.bin).toEqual({ 'context-tax': 'dist/index.js' });
     expect(pkg.files).toContain('dist');
-    expect(pkg.engines).toEqual({ node: '>=18' });
+    // Pinned rather than range-checked, so moving the floor is a deliberate edit with a reason
+    // attached rather than a number that drifts. It is 20 because that is the lowest version the
+    // suite can actually run on: vitest reaches rolldown, which imports `styleText` from node:util,
+    // and that landed in Node 20. A version `engines` claims but CI cannot execute is an undefended
+    // claim, which is the one thing this package is not allowed to print.
+    expect(pkg.engines).toEqual({ node: '>=20' });
     // `bin` points into `dist`, so the entry point has to carry the shebang before tsc copies it.
     const cli = await readFile(join(packageRoot, 'src', 'index.ts'), 'utf8');
     expect(cli.startsWith('#!/usr/bin/env node\n')).toBe(true);

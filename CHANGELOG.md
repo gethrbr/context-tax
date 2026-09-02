@@ -21,6 +21,12 @@ First public release.
   than carrying them in every prompt, and collapsing the two costs into one number would misreport
   one of them.
 
+### Requires
+
+- Node 20 or newer. The package's own code runs on 18, but the test toolchain does not, and a
+  supported version that cannot be tested is not a supported version. Node 18 reached end of life in
+  April 2025.
+
 ### Notes
 
 - Token counts are `chars / 4`, checked by execution to within 4%.
