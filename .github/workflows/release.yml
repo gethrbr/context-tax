@@ -19,9 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required for npm provenance: the registry signs an attestation tying the
-      # tarball to this workflow run and this commit, so anybody installing it can
-      # check where it was built rather than taking the maintainer's word for it.
+      # Mints the OIDC token this job publishes with. It carries two jobs: npm's
+      # trusted publisher accepts it in place of a long-lived token, and the registry
+      # signs a provenance attestation tying the tarball to this run and this commit,
+      # so an installer can check where it was built rather than taking our word.
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -29,8 +30,23 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
           cache: npm
+          # `registry-url:` is deliberately absent. Setting it makes setup-node write
+          # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into .npmrc. Under
+          # trusted publishing there is no NODE_AUTH_TOKEN, so that line expands to an
+          # empty token, npm reads it as "auth is already configured" and never starts
+          # the OIDC exchange, and the publish dies with ENEEDAUTH against a registry
+          # that would have accepted it. npm defaults to registry.npmjs.org on its own,
+          # so the line buys nothing and costs the release. See actions/setup-node#1551.
+
+      # OIDC publishing landed in npm 11.5.1. Node 22 ships npm 10, which would fall
+      # back to token auth, find no token, and fail. Pinning to `latest` rather than an
+      # exact version is deliberate here: this is the one place where being behind is
+      # the failure mode, and the publish is gated by the tests below regardless.
+      - name: npm new enough for OIDC
+        run: |
+          npm install -g npm@latest
+          npm --version
 
       - run: npm ci
 
@@ -48,12 +64,8 @@ jobs:
       # tarball is made, so this line is the whole gate. --access public is explicit
       # rather than implied, so the package cannot become private by default later.
       #
-      # NPM_TOKEN is a long-lived credential and the weakest part of this workflow.
-      # Once the package exists on the registry, configure a trusted publisher for it
-      # (npmjs.com > package > Settings > Trusted Publisher: this repo, this workflow
-      # file) and delete both the secret and the `env:` block below. npm then accepts
-      # the same OIDC identity that `id-token: write` already mints for provenance,
-      # and there is no token left to leak.
+      # There is no `env:` block and no NPM_TOKEN. Authentication is the OIDC token
+      # minted above, exchanged with the registry for a credential that lives for this
+      # job only, against the trusted publisher registered for this package. Nothing
+      # long-lived exists to leak, and a stolen repo secret is no longer a way in.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
