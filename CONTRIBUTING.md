@@ -20,7 +20,7 @@ npm run build
 ```
 
 CI runs typecheck and lint once on Node 22, because their output does not vary by Node version, and
-runs the tests and the build on Node 18, 20 and 22. Each matrix leg then packs the tarball, installs
+runs the tests and the build on Node 20, 22 and 24. Each matrix leg then packs the tarball, installs
 it into a clean directory and runs it, because a build that compiles is not evidence that the thing
 people install works.
 

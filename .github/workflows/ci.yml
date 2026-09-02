@@ -33,7 +33,15 @@ jobs:
       matrix:
         # The floor is what `engines` promises. Breaking it should fail here, not
         # in somebody's `npx`.
-        node: ['18', '20', '22']
+        #
+        # The floor is 20 because that is the lowest version this can honestly claim.
+        # The package's own code runs on 18 and Node 18 has been EOL since April 2025,
+        # but the test toolchain no longer starts there: vitest reaches rolldown, which
+        # imports `styleText` from node:util, added in Node 20. Keeping `>=18` in
+        # `engines` while being unable to run a single test on it would be an undefended
+        # claim, which is the exact thing this package refuses to print about anybody
+        # else's configuration.
+        node: ['20', '22', '24']
     name: node ${{ matrix.node }}
     runs-on: ubuntu-latest
     steps:
