@@ -2,7 +2,7 @@
 
 # context-tax
 
-**What your coding agent's context costs you on every turn, and which of it you never used.**
+**What Claude Code's context costs you on every turn, and which of it you never used.**
 
 [![npm](https://img.shields.io/npm/v/context-tax?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/context-tax)
 [![CI](https://img.shields.io/github/actions/workflow/status/gethrbr/context-tax/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci)](https://github.com/gethrbr/context-tax/actions/workflows/ci.yml)
@@ -13,6 +13,8 @@
 ```bash
 npx context-tax
 ```
+
+**For [Claude Code](https://claude.com/claude-code).**
 
 </div>
 
@@ -451,9 +453,9 @@ for (const finding of ledger.findings) {
 <summary><b>Does this work with anything other than Claude Code?</b></summary>
 <br>
 
-Not yet. The `resolve` and `evidence` passes read Claude Code's config chain and transcript format.
-The `measure` pass is plain MCP and is client-agnostic, so most of the work needed for another
-client is a second reader. Issues describing a client's config and log layout are welcome.
+No. The `resolve` and `evidence` passes read Claude Code's config chain and transcript format. The
+`measure` pass is plain MCP and client-agnostic, so a reader for another client is mostly a second
+`resolve` and `evidence` pass. If you use one, open an issue with its config and log layout.
 
 </details>
 
