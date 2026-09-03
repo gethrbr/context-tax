@@ -158,6 +158,24 @@ function renderFinding(finding: Finding, index: number, colour: Palette, width: 
   return out;
 }
 
+/**
+ * Nothing was found, as opposed to nothing being expensive.
+ *
+ * 🔑 These are not the same screen and printing the first as the second is how a stranger's
+ * only run of this tool reads as a broken one. A grid whose every cell is `0` or `-` looks like a
+ * tool that failed, so the run that finds nothing says so in a sentence instead of drawing the
+ * table. `null` tokens are deliberately excluded: null means we could not measure it, which is a
+ * real cost with an unknown size, and that run has something to show.
+ */
+function nothingToMeasure(ledger: Ledger): boolean {
+  return (
+    ledger.rows.every((row) => row.kind !== 'mcp-server' && row.tokens === 0) &&
+    ledger.findings.length === 0 &&
+    ledger.reconciliation.total === null &&
+    ledger.reconciliation.sessions === 0
+  );
+}
+
 export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidth()): string {
   const out: string[] = [];
   const line = (text = ''): void => {
@@ -173,8 +191,44 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
     for (const part of wrapClamped(text, width - indent, max)) line(' '.repeat(indent) + paint(part));
   };
 
+  /** What could not be read. It outlives the early return: a file we choked on is always news. */
+  const problems = (): void => {
+    if (ledger.problems.length === 0) return;
+    line();
+    line(`  ${colour.bold('PROBLEMS')}`);
+    for (const problem of ledger.problems) {
+      say(problem.message, 4, colour.yellow);
+      say(shortPath(problem.path, width - 6), 6, colour.dim, 2);
+    }
+  };
+
   line();
   line(`  ${colour.bold('context-tax')}  ${colour.dim(shortPath(ledger.cwd, width - 15))}`);
+
+  if (nothingToMeasure(ledger)) {
+    line();
+    line(`  ${colour.bold('NOTHING TO MEASURE HERE')}`);
+    say(
+      'No MCP servers, skills, agents or memory files were found for this directory, and no' +
+        ' session history on this machine to join them against. That is nothing to bill rather' +
+        ' than a bill of nothing.',
+      4,
+      colour.yellow,
+    );
+    say(
+      'This reads what your agent loads here and what your own sessions actually called, so it' +
+        ' has something to say from a repository where you use Claude Code. Point it at one with' +
+        ' --cwd <path>, or cd there and run it again.',
+      4,
+      colour.dim,
+    );
+    problems();
+    line();
+    line(`  ${colour.dim('context-tax config    what is loaded, and from where')}`);
+    line();
+    return out.join('\n');
+  }
+
   say(PROVISIONAL_NOTE, 2, colour.dim);
   say(
     'tokens: what every turn carries. deferred: the schemas behind it, paid when something loads them.',
@@ -304,14 +358,7 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
     colour.dim,
   );
 
-  if (ledger.problems.length > 0) {
-    line();
-    line(`  ${colour.bold('PROBLEMS')}`);
-    for (const problem of ledger.problems) {
-      say(problem.message, 4, colour.yellow);
-      say(shortPath(problem.path, width - 6), 6, colour.dim, 2);
-    }
-  }
+  problems();
 
   line();
   if (ledger.recoverable > 0) {
