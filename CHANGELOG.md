@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.1
+
+### Fixed
+
+- A run that finds nothing now says so, instead of drawing a grid with `0` or `-` in every cell. In
+  a directory with no MCP servers, skills, agents or memory files, and no session history to join
+  them against, the whole table was printed anyway, and an empty table reads as a tool that failed
+  rather than as a machine with nothing on it. That was the run a new reader was most likely to make
+  first.
+
+### Notes
+
+- The new screen is deliberately narrow in what it claims. A `null` token count still prints the
+  table, because `null` means an item could not be measured, which is a real cost of unknown size
+  rather than an absence. A machine with sessions on record but nothing loaded also keeps the full
+  screen, because it still has a billed total to reconcile against.
+- `PROBLEMS` is reported on both paths. A file that could not be read is news whether or not
+  anything else was found.
+
 ## 0.1.0
 
 First public release.
