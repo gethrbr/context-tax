@@ -528,4 +528,6 @@ Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 [MIT](./LICENSE) · [Report an issue](https://github.com/gethrbr/context-tax/issues) · [Changelog](./CHANGELOG.md)
 
+<sub>Built by the team behind [Harbor](https://gethrbr.com), a shared brain for your team's agents.</sub>
+
 </div>
