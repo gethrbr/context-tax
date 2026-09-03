@@ -16,6 +16,21 @@ on:
 
 jobs:
   publish:
+    # 🚨 The ref, not the event, is what decides whether this may publish.
+    #
+    # Trusted publishing binds the credential to this repository and this workflow file,
+    # and to nothing else. No branch, no environment, no approval. So `workflow_dispatch`
+    # against an arbitrary branch used to mint a real OIDC token and run the publish
+    # below against whatever that branch's manifest said, which turns write access on
+    # this repository directly into the ability to ship code to everyone who has ever
+    # run `npx context-tax`. A duplicate version is refused by the registry, so the
+    # hole was never overwriting 0.1.1; it was publishing 0.1.2 off a branch nobody
+    # reviewed.
+    #
+    # `release: published` always carries `refs/tags/<tag>`, so this costs the release
+    # path nothing, and a dispatch still works when it is aimed at a release tag, which
+    # is the transient-failure re-run the comment above is keeping.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,8 +67,11 @@ jobs:
 
       # The tag and the manifest have to agree. A release tagged v0.2.0 that publishes
       # 0.1.0 is worse than a failed release: it succeeds quietly and the tag lies.
+      #
+      # This used to be skipped on `workflow_dispatch`, which is precisely the path with
+      # nothing else checking it. It is unconditional now: the job cannot start from
+      # anything but a `v*` tag, so there is always a tag here to compare against.
       - name: tag matches package.json
-        if: github.event_name == 'release'
         run: |
           manifest=$(node -p "require('./package.json').version")
           tag="${GITHUB_REF_NAME#v}"
