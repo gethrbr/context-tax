@@ -14,7 +14,7 @@
 npx context-tax
 ```
 
-**For [Claude Code](https://claude.com/claude-code).** Not Codex, and [the measurement showing why Codex does not need it](#faq).
+**For [Claude Code](https://claude.com/claude-code).**
 
 </div>
 
@@ -450,31 +450,12 @@ for (const finding of ledger.findings) {
 ## FAQ
 
 <details>
-<summary><b>Does this work with Codex, or anything other than Claude Code?</b></summary>
+<summary><b>Does this work with anything other than Claude Code?</b></summary>
 <br>
 
-No. For Codex specifically, the honest answer is that it would have nothing to tell you.
-
-Measured 2026-09-03 against `@openai/codex@0.145.0`: **adding an MCP server to a Codex prompt costs
-exactly zero tokens.** A purpose-built probe server was registered, then given 8,000 extra characters
-of tool *schema*, then 8,000 extra characters of tool *description*. The prompt came back identical
-at 15,683 input tokens all three times. The same 8,000 characters on a *skill* description moved it
-by +509, so the rig does detect resident text. MCP tool text simply is not in the prompt.
-
-That is the shipped design rather than a quirk: [openai/codex#29486](https://github.com/openai/codex/pull/29486)
-makes tool search the default path for MCP tools. Codex defers the **whole tool**, name and
-description included. Claude Code defers only the schema and keeps names and descriptions resident,
-which is exactly why there is a tax to find here and not there.
-
-Which means the advice every Codex tuning guide still repeats, *prune the MCP servers you are not
-using*, is out of date. There is nothing to prune.
-
-Measured through `codex exec` on 0.145.0. A local or non-OpenAI provider may not defer, and that case
-is unmeasured.
-
-The `measure` pass is plain MCP and client-agnostic, so a reader for another client is mostly a
-second `resolve` and `evidence` pass. If you use a client where tool definitions are resident, open
-an issue with its config and log layout.
+No. The `resolve` and `evidence` passes read Claude Code's config chain and transcript format. The
+`measure` pass is plain MCP and client-agnostic, so a reader for another client is mostly a second
+`resolve` and `evidence` pass. If you use one, open an issue with its config and log layout.
 
 </details>
 
