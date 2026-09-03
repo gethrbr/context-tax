@@ -296,4 +296,55 @@ describe('a machine with nothing on it', () => {
     const screen = renderLedger(ledgerFixture(), plain, 80);
     expect(screen).toContain('2,282 tokens of every turn');
   });
+
+  /** Nothing loaded here AND no session history to join it against. The first-contact run. */
+  function nothingLedger(): Ledger {
+    const base = emptyLedger();
+    return { ...base, problems: [], reconciliation: { ...base.reconciliation, sessions: 0 } };
+  }
+
+  // 🚨 The run a stranger is most likely to make first: `npx context-tax` in a directory
+  // that has nothing to do with their agent. It drew the full grid with `0` or `-` in every cell,
+  // which reads as a tool that is broken rather than as a machine with nothing on it. Nobody runs
+  // a tool a second time after that.
+  it('🚨 says there is nothing here instead of drawing a table of zeros', () => {
+    const screen = renderLedger(nothingLedger(), plain, 80);
+    expect(screen).toContain('NOTHING TO MEASURE HERE');
+    // It has to say what to do next, not only that it found nothing.
+    expect(screen).toContain('--cwd');
+    // Not one border character, so there is no empty grid left on screen to misread.
+    expect(screen).not.toContain('┌');
+    expect(screen).not.toContain('│');
+    // And no legend for columns that are not being printed.
+    expect(screen).not.toContain('deferred');
+    // A caveat about what could not be measured is noise when nothing was measured at all.
+    expect(screen).not.toContain('NOT MEASURABLE HERE');
+  });
+
+  it('goes back to the full screen as soon as there is history to join against', () => {
+    const base = nothingLedger();
+    const screen = renderLedger(
+      { ...base, reconciliation: { ...base.reconciliation, sessions: 10 } },
+      plain,
+      80,
+    );
+    expect(screen).not.toContain('NOTHING TO MEASURE HERE');
+    expect(screen).toContain('┌');
+  });
+
+  // A file we choked on is news whether or not anything else was found, and the early return is
+  // exactly the path that would have dropped it silently.
+  it('still reports a file it could not read, with nothing else to report', () => {
+    const screen = renderLedger(
+      {
+        ...nothingLedger(),
+        problems: [{ path: '/Users/somebody/project/.mcp.json', message: JSON_ERROR }],
+      },
+      plain,
+      80,
+    );
+    expect(screen).toContain('NOTHING TO MEASURE HERE');
+    expect(screen).toContain('PROBLEMS');
+    expect(screen).toContain('unsupported_protocol_version');
+  });
 });
