@@ -19,7 +19,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
-import { isAbsolute, relative, resolve as resolvePath } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 
 import { HELP, parseArgs } from './args.js';
 import { scanEvidence } from './evidence/index.js';
@@ -34,6 +34,7 @@ import { progress, startingLabel } from './render/progress.js';
 import { renderLedger } from './render/ledger.js';
 import { renderMeasure } from './render/measure.js';
 import { resolveConfig } from './resolve/index.js';
+import { trustsProjectServers } from './trust.js';
 
 import type { Args } from './args.js';
 import type { Ledger } from './ledger/types.js';
@@ -58,18 +59,6 @@ async function version(): Promise<string> {
   }
   return 'unknown';
 }
-
-function isWithin(child: string, parent: string): boolean {
-  const rel = relative(parent, child);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-/** Either direction: the flag pointing up at the repo root, or down at one of its packages. */
-function sameTree(target: string): boolean {
-  const here = resolvePath(process.cwd());
-  return isWithin(here, target) || isWithin(target, here);
-}
-
 
 async function config(args: Args): Promise<void> {
   // 🔒 `launch` holds command lines, environment values and bearer tokens. It is destructured away
@@ -109,7 +98,10 @@ async function buildAll(args: Args): Promise<Ledger> {
         spawn: args.spawn,
         refresh: args.refresh,
         timeoutMs: args.timeoutMs,
-        trustProjectServers: args.cwd === undefined || sameTree(resolvePath(args.cwd)),
+        // 🚨 A project `.mcp.json` belonging to a directory you are not working in may not be
+        // started: running one executes code from a repo you only pointed at. `trust.ts` owns the
+        // rule and the reasoning; it is not inlined here because it needs a test.
+        trustProjectServers: trustsProjectServers(args.cwd, resolvedResult.config),
         onProbe: ({ kind, name }) => {
           if (kind === 'start') running.add(name);
           else running.delete(name);
@@ -228,11 +220,8 @@ async function measure(args: Args): Promise<void> {
       else running.delete(name);
       spinner.set(startingLabel(running));
     },
-    // 🚨 A project `.mcp.json` we are not standing in may not be started: running one executes
-    // code from a directory the user only pointed at. Standing in the tree is consent, a flag is
-    // not. Anywhere inside the tree counts, because running this from `packages/x` is still
-    // running it in your own repo.
-    trustProjectServers: args.cwd === undefined || sameTree(resolvePath(args.cwd)),
+    // 🚨 Same boundary as the default command, same reasoning, in `trust.ts`.
+    trustProjectServers: trustsProjectServers(args.cwd, resolved.config),
   }).finally(() => spinner.done());
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ config: resolved.config, measure: result }, null, 2)}\n`);
