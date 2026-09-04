@@ -85,6 +85,20 @@ describe('what this package promises', () => {
     expect(callers).toEqual(['src/measure/client.ts']);
   });
 
+  /**
+   * 🔒 The report is stdout. Progress is stderr. Nothing may blur that line.
+   *
+   * Enforced at the import graph rather than by looking at a terminal, because in a terminal both
+   * streams land in the same window and a spinner written to stdout looks exactly right — right up
+   * until somebody runs `--json > file` or pipes the report into `less` and finds carriage returns
+   * and spinner frames in it.
+   */
+  it('keeps progress on stderr, so nothing can contaminate the report', async () => {
+    const source = await readFile(join(packageRoot, 'src', 'render', 'progress.ts'), 'utf8');
+    expect(source).not.toContain('process.stdout');
+    expect(source).toContain('process.stderr');
+  });
+
   it('ships a runnable bin, a licence and a readme', async () => {
     const pkg = await manifest();
     expect(pkg.bin).toEqual({ 'context-tax': 'dist/index.js' });

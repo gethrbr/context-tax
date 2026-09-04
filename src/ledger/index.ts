@@ -15,7 +15,7 @@
  *     it, that is said out loud instead of being absorbed.
  */
 
-import type { Evidence, SessionEvidence } from '../evidence/types.js';
+import type { Evidence, ProjectEvidence, SessionEvidence } from '../evidence/types.js';
 import { actionKey } from '../fix/types.js';
 import type { FixAction } from '../fix/types.js';
 import { tokens as toTokens } from '../measure/tokens.js';
@@ -27,7 +27,14 @@ import type {
   ResolvedSkill,
   SkillOverride,
 } from '../resolve/types.js';
-import type { Finding, Ledger, LedgerRow, Verdict } from './types.js';
+import type {
+  EvidenceScope,
+  Finding,
+  Ledger,
+  LedgerRow,
+  MachineEvidence,
+  Verdict,
+} from './types.js';
 
 export interface LedgerOptions {
   /**
@@ -58,6 +65,16 @@ const DEFAULT_MIN_SESSIONS = 5;
  * sessions, whose schema is re-sent on all of them.
  */
 const RARELY_CALLED = 0.1;
+
+/** One slice of the scan, rolled up. Built twice: this tree, and the whole machine. */
+interface Usage {
+  calls: Map<string, number>;
+  toolCalls: Map<string, Map<string, number>>;
+  skillModelCalls: Map<string, number>;
+  skillTypedCalls: Map<string, number>;
+  agentCalls: Map<string, number>;
+}
+
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -229,6 +246,22 @@ function skillLabels(skills: { name: string; plugin: string | null }[]): string[
   );
 }
 
+/**
+ * Why a row's number did not come from this machine, in the words `measure` already uses.
+ *
+ * The fallback table is a real measurement of a real server, taken elsewhere and shipped with the
+ * package. It is not the same claim as "we started your copy and weighed it", and until now the
+ * main screen printed both as a bare number with nothing to tell them apart.
+ */
+/** The scope suffix used in every finding, matching the one the renderer uses on the table. */
+const where = (scope: EvidenceScope): string => (scope === 'machine' ? ' on this machine' : '');
+
+function basisFor(measured: MeasuredMcpServer): string | null {
+  return measured.status.kind === 'estimated'
+    ? `from the bundled table (${measured.status.source}), not your machine`
+    : null;
+}
+
 function serverVerdict(
   measured: MeasuredMcpServer,
   calls: number,
@@ -237,6 +270,7 @@ function serverVerdict(
   since: ConfiguredSince,
   windowSessions: number,
   minSessions: number,
+  scope: EvidenceScope,
 ): Verdict {
   if (measured.status.kind === 'unmeasured') {
     return measured.status.cause === 'failed'
@@ -255,11 +289,16 @@ function serverVerdict(
       // finding being withheld, which is the same trade the `never-called` branch refuses to make
       // only because there the claim would be that something is dead.
       if (windowSessions >= minSessions && perCall !== null && calls / windowSessions < RARELY_CALLED) {
-        return { kind: 'rarely-called', calls, sessions: windowSessions, perCall, window: 'on record' };
+        return { kind: 'rarely-called', calls, sessions: windowSessions, perCall, window: 'on record', scope };
       }
-      return { kind: 'earning-it', calls, sessions: windowSessions, window: 'on record' };
+      return { kind: 'earning-it', calls, sessions: windowSessions, window: 'on record', scope };
     }
-    return { kind: 'never-called-age-unknown', sessions: windowSessions, why: since.known ? '' : since.reason };
+    return {
+      kind: 'never-called-age-unknown',
+      sessions: windowSessions,
+      why: since.known ? '' : since.reason,
+      scope,
+    };
   }
   if (calls > 0) {
     if (sessionsSince >= minSessions && perCall !== null && calls / sessionsSince < RARELY_CALLED) {
@@ -269,12 +308,81 @@ function serverVerdict(
         sessions: sessionsSince,
         perCall,
         window: 'since it was configured',
+        scope,
       };
     }
-    return { kind: 'earning-it', calls, sessions: sessionsSince, window: 'since it was configured' };
+    return { kind: 'earning-it', calls, sessions: sessionsSince, window: 'since it was configured', scope };
   }
-  if (sessionsSince < minSessions) return { kind: 'too-new', sessions: sessionsSince };
-  return { kind: 'never-called', sessions: sessionsSince, window: 'since it was configured' };
+  if (sessionsSince < minSessions) return { kind: 'too-new', sessions: sessionsSince, scope };
+  return { kind: 'never-called', sessions: sessionsSince, window: 'since it was configured', scope };
+}
+
+/**
+ * Everything a set of projects called, rolled up.
+ *
+ * Extracted so the same arithmetic can be run twice over different slices of the same scan: once
+ * for this directory tree and once for the machine. The two results are never merged. A row picks
+ * one of them and the screen says which, because a denominator you cannot name is a denominator
+ * you cannot check.
+ */
+function aggregate(projects: ProjectEvidence[]): Usage {
+  const calls = new Map<string, number>();
+  /** server -> tool -> calls. A mostly-dead server with one hot tool is visible as such. */
+  const toolCalls = new Map<string, Map<string, number>>();
+  const skillModelCalls = new Map<string, number>();
+  const skillTypedCalls = new Map<string, number>();
+  /** Keyed by `subagent_type`, which takes the same two name forms `callsFor` handles. */
+  const agentCalls = new Map<string, number>();
+
+  for (const project of projects) {
+    for (const [name, use] of Object.entries(project.mcpServers)) {
+      calls.set(name, (calls.get(name) ?? 0) + use.calls);
+      const perTool = toolCalls.get(name) ?? new Map<string, number>();
+      for (const [tool, count] of Object.entries(use.tools)) {
+        perTool.set(tool, (perTool.get(tool) ?? 0) + count);
+      }
+      toolCalls.set(name, perTool);
+    }
+    for (const [name, use] of Object.entries(project.skills)) {
+      skillModelCalls.set(name, (skillModelCalls.get(name) ?? 0) + use.model);
+    }
+    // \u26a0\ufe0f Typed invocations live here and not in `skills[].user`, which the scanner never fills:
+    // the scanner cannot tell a skill from a built-in like `/compact` without the resolved config,
+    // so it records every `/name` and leaves the filtering to this join, which has the config.
+    for (const [name, count] of Object.entries(project.slashCommands)) {
+      skillTypedCalls.set(name, (skillTypedCalls.get(name) ?? 0) + count);
+    }
+    for (const [name, count] of Object.entries(project.agents)) {
+      agentCalls.set(name, (agentCalls.get(name) ?? 0) + count);
+    }
+  }
+
+  return { calls, toolCalls, skillModelCalls, skillTypedCalls, agentCalls };
+}
+
+/**
+ * What every project on this machine adds up to, and what the user typed to survive it.
+ *
+ * ⚠️ Two different bases on purpose, because the honest answer to each is a different set.
+ * `sessions` counts only what a human started, since a subagent transcript is not a session and
+ * counting it as one inflates every per-session number in the tool. `turns` and `contextTokens`
+ * count **everything**, subagents included, because those turns were billed and the line's whole
+ * job is to say what this machine has actually carried.
+ */
+function machineTotals(evidence: Evidence, sessions: SessionEvidence[]): MachineEvidence {
+  let clears = 0;
+  let compacts = 0;
+  for (const project of evidence.projects) {
+    clears += project.slashCommands['clear'] ?? 0;
+    compacts += project.slashCommands['compact'] ?? 0;
+  }
+  return {
+    sessions: sessions.length,
+    turns: evidence.sessions.reduce((sum, session) => sum + session.turns, 0),
+    contextTokens: evidence.sessions.reduce((sum, session) => sum + session.contextTokens, 0),
+    clears,
+    compacts,
+  };
 }
 
 export function buildLedger(
@@ -290,9 +398,10 @@ export function buildLedger(
 
   // Subagent transcripts are billed work but carry a different prefix, so they would bias the
   // cold-start median and inflate every per-session denominator derived from this list.
-  const sessions = evidence.sessions
-    .filter((session) => session.kind === 'session' && under(session.cwd, root))
+  const allSessions = evidence.sessions
+    .filter((session) => session.kind === 'session')
     .sort((a, b) => (b.firstSeen ?? '').localeCompare(a.firstSeen ?? ''));
+  const sessions = allSessions.filter((session) => under(session.cwd, root));
 
   const recent = sessions.filter((session) => session.coldStartTokens !== null).slice(0, windowSize);
   const total = median(recent.map((session) => session.coldStartTokens ?? 0));
@@ -302,36 +411,43 @@ export function buildLedger(
       : `${recent.length} most recent session${recent.length === 1 ? '' : 's'}, ` +
         `${(recent[recent.length - 1].firstSeen ?? '').slice(0, 10)} to ${(recent[0].firstSeen ?? '').slice(0, 10)}`;
 
-  const calls = new Map<string, number>();
-  /** server -> tool -> calls, aggregated across every project under the root. */
-  const toolCalls = new Map<string, Map<string, number>>();
-  const skillModelCalls = new Map<string, number>();
-  const skillTypedCalls = new Map<string, number>();
-  /** Keyed by `subagent_type`, which takes the same two name forms `callsFor` handles. */
-  const agentCalls = new Map<string, number>();
-  for (const project of evidence.projects) {
-    if (!under(project.cwd, root)) continue;
-    for (const [name, use] of Object.entries(project.mcpServers)) {
-      calls.set(name, (calls.get(name) ?? 0) + use.calls);
-      const perTool = toolCalls.get(name) ?? new Map<string, number>();
-      for (const [tool, count] of Object.entries(use.tools)) {
-        perTool.set(tool, (perTool.get(tool) ?? 0) + count);
-      }
-      toolCalls.set(name, perTool);
-    }
-    for (const [name, use] of Object.entries(project.skills)) {
-      skillModelCalls.set(name, (skillModelCalls.get(name) ?? 0) + use.model);
-    }
-    // ⚠️ Typed invocations live here and not in `skills[].user`, which the scanner never fills:
-    // the scanner cannot tell a skill from a built-in like `/compact` without the resolved config,
-    // so it records every `/name` and leaves the filtering to this join, which has the config.
-    for (const [name, count] of Object.entries(project.slashCommands)) {
-      skillTypedCalls.set(name, (skillTypedCalls.get(name) ?? 0) + count);
-    }
-    for (const [name, count] of Object.entries(project.agents)) {
-      agentCalls.set(name, (agentCalls.get(name) ?? 0) + count);
-    }
-  }
+  const here = aggregate(evidence.projects.filter((project) => under(project.cwd, root)));
+  const everywhere = aggregate(evidence.projects);
+
+  /**
+   * This project cannot judge anything, so the machine has to.
+   *
+   * Below `minSessions` there is no denominator here worth printing, and the old behaviour was to
+   * print a table of dashes: `share`, `calls` and `per call` all empty, which is every column that
+   * carries the argument. The history to answer it was on the same disk the whole time, one
+   * directory up. Widening is only honest because the scope is then said on the screen.
+   */
+  const thin = sessions.length < minSessions && allSessions.length >= minSessions;
+
+  /**
+   * 🔑 The rule the whole change turns on: **a verdict's denominator must cover everything its fix
+   * would switch off.**
+   *
+   * `claude mcp remove <name> -s user` is machine-wide, so recommending it on this project's
+   * silence is a recommendation to break the project next door. Found on a real machine: a server
+   * with one call in 152 sessions here, 67 in a sibling repo, and a `-s user` removal printed
+   * against it.
+   */
+  const serverScope = (server: ResolvedMcpServer): EvidenceScope =>
+    server.fixLever.kind === 'claude-mcp-remove' && server.fixLever.scope === 'user'
+      ? 'machine'
+      : thin
+        ? 'machine'
+        : 'project';
+
+  /** Skills, agents and plugins have no machine-wide lever, so they widen only when starved. */
+  const fileScope: EvidenceScope = thin ? 'machine' : 'project';
+  const fileUsage = fileScope === 'machine' ? everywhere : here;
+  const fileSessions = fileScope === 'machine' ? allSessions.length : sessions.length;
+  const { skillModelCalls, skillTypedCalls } = fileUsage;
+  /** Never a bare session count. The reader has to be able to see which history it was counted over. */
+  const overSessions = (count: number): string =>
+    `${count} session${count === 1 ? '' : 's'} ${fileScope === 'machine' ? 'on this machine' : 'here'}`;
 
   /**
    * Has nothing this plugin provides ever been used?
@@ -342,19 +458,25 @@ export function buildLedger(
    * and a single call anywhere is enough to rule the lever out.
    */
   const pluginIsIdle = (id: string): boolean => {
+    // \u{1F6A8} Machine-wide on purpose, and stricter than every other denominator here. This guards the
+    // only lever that takes four things away at once, so a single call anywhere on the machine has
+    // to be enough to rule it out. Scoping it to this tree would switch off a plugin that is
+    // working in another repo, and the tool would report success while doing it.
     const usedServer = config.mcpServers.some(
-      (server) => server.plugin === id && (calls.get(server.name) ?? 0) > 0,
+      (server) => server.plugin === id && (everywhere.calls.get(server.name) ?? 0) > 0,
     );
     const usedSkill = config.skills.some(
       (skill) =>
         skill.plugin === id &&
-        callsFor(skillModelCalls, skill.name, id) + callsFor(skillTypedCalls, skill.name, id) > 0,
+        callsFor(everywhere.skillModelCalls, skill.name, id) +
+          callsFor(everywhere.skillTypedCalls, skill.name, id) >
+          0,
     );
     const usedAgent = config.agents.some(
-      (agent) => agent.plugin === id && callsFor(agentCalls, agent.name, id) > 0,
+      (agent) => agent.plugin === id && callsFor(everywhere.agentCalls, agent.name, id) > 0,
     );
     const usedCommand = config.commands.some(
-      (command) => command.plugin === id && callsFor(skillTypedCalls, command.name, id) > 0,
+      (command) => command.plugin === id && callsFor(everywhere.skillTypedCalls, command.name, id) > 0,
     );
     return !usedServer && !usedSkill && !usedAgent && !usedCommand;
   };
@@ -368,10 +490,13 @@ export function buildLedger(
   for (const measured of measure.servers) {
     const declared = config.mcpServers.find((entry) => entry.name === measured.name);
     if (declared === undefined) continue;
-    const used = calls.get(measured.name) ?? 0;
+    const scope = serverScope(declared);
+    const usage = scope === 'machine' ? everywhere : here;
+    const scoped = scope === 'machine' ? allSessions : sessions;
+    const used = usage.calls.get(measured.name) ?? 0;
     // Scoped to the same window the verdict uses. A server added last week must not be charged for
     // turns taken before it existed.
-    const inWindow = startedSince(sessions, declared.configuredSince) ?? sessions;
+    const inWindow = startedSince(scoped, declared.configuredSince) ?? scoped;
     const turns = turnsIn(inWindow);
     // 🔑 Every per-turn number below is the **resident** one. The client defers tool schemas, so
     // charging a server's whole serialized weight to every turn would overstate acme by 3.2x.
@@ -382,10 +507,11 @@ export function buildLedger(
       measured,
       used,
       perCall,
-      startedSince(sessions, declared.configuredSince)?.length ?? null,
+      startedSince(scoped, declared.configuredSince)?.length ?? null,
       declared.configuredSince,
-      sessions.length,
+      scoped.length,
       minSessions,
+      scope,
     );
     rows.push({
       label: measured.name,
@@ -395,6 +521,7 @@ export function buildLedger(
       share: share(perTurn),
       calls: used,
       perCall,
+      basis: basisFor(measured),
       verdict,
       fix: fixFor(declared),
     });
@@ -421,7 +548,9 @@ export function buildLedger(
           ' every time something does.';
     if (verdict.kind === 'rarely-called' && perTurn !== null) {
       findings.push({
-        headline: `${measured.name} is loaded on every turn and used in ${verdict.calls} of ${verdict.sessions} sessions`,
+        headline:
+          `${measured.name} is loaded on every turn and used in ${verdict.calls} of ` +
+          `${verdict.sessions} sessions${where(verdict.scope)}`,
         detail:
           `${perTurn.toLocaleString('en-US')} tokens re-sent across ${turns.toLocaleString('en-US')} turns for ` +
           `${verdict.calls} call${verdict.calls === 1 ? '' : 's'}: ${verdict.perCall.toLocaleString('en-US')} tokens of ` +
@@ -436,7 +565,8 @@ export function buildLedger(
           declared,
           perTurn,
           `${measured.name} costs ${perTurn.toLocaleString('en-US')} tokens every turn for ` +
-            `${verdict.calls} call${verdict.calls === 1 ? '' : 's'} in ${verdict.sessions} sessions.`,
+            `${verdict.calls} call${verdict.calls === 1 ? '' : 's'} in ${verdict.sessions} ` +
+            `sessions${where(verdict.scope)}.`,
           pluginIsIdle,
         ),
       });
@@ -445,7 +575,8 @@ export function buildLedger(
       findings.push({
         headline: `${measured.name} costs ${perTurn.toLocaleString('en-US')} tokens every turn and has never been called`,
         detail:
-          `0 calls in ${verdict.sessions} session${verdict.sessions === 1 ? '' : 's'} ${verdict.window}.` +
+          `0 calls in ${verdict.sessions} session${verdict.sessions === 1 ? '' : 's'}` +
+          `${where(verdict.scope)} ${verdict.window}.` +
           loadedClause,
         saves: perTurn,
         fix: fixFor(declared),
@@ -453,7 +584,8 @@ export function buildLedger(
           declared,
           perTurn,
           `${measured.name} costs ${perTurn.toLocaleString('en-US')} tokens every turn and ` +
-            `has never been called in ${verdict.sessions} sessions ${verdict.window}.`,
+            `has never been called in ${verdict.sessions} sessions${where(verdict.scope)} ` +
+            `${verdict.window}.`,
           pluginIsIdle,
         ),
       });
@@ -472,7 +604,7 @@ export function buildLedger(
     // reader cannot resolve, and they resolve it by disbelieving both numbers. Found against a
     // real renamed server, which is why the guard counts against the tool list rather than
     // asking for more than one tool.
-    const perTool = toolCalls.get(measured.name);
+    const perTool = usage.toolCalls.get(measured.name);
     const unusedTools = measured.tools.filter((tool) => (perTool?.get(tool.name) ?? 0) === 0);
     if (
       verdict.kind === 'earning-it' &&
@@ -531,7 +663,7 @@ export function buildLedger(
         // in `resolve/mcp.ts`: the evidence is repo-scoped, so the edit has to be. Project scope
         // works — this repo's own `.claude/settings.json` already carries an `enabledPlugins` block.
         settingsPath: config.settingsTarget,
-        why: `nothing the ${skill.plugin} plugin provides has been used here`,
+        why: `nothing the ${skill.plugin} plugin provides has been used anywhere on this machine`,
         saves: toTokens(skill.listingChars),
       };
     }
@@ -557,6 +689,7 @@ export function buildLedger(
       0,
     ),
     perCall: null,
+    basis: null,
     verdict: {
       kind: 'not-attributable',
       why: 'a skill listing is one line each; the useful unit is the skill, below',
@@ -598,7 +731,7 @@ export function buildLedger(
   if (neverUsedSkills.length > 0) {
     findings.push({
       headline: `${neverUsedSkills.length} skill${neverUsedSkills.length === 1 ? '' : 's'} never invoked, either way`,
-      detail: `${skillLabels(neverUsedSkills).join(', ')}. Across ${sessions.length} sessions here.`,
+      detail: `${skillLabels(neverUsedSkills).join(', ')}. Across ${overSessions(fileSessions)}.`,
       saves: toTokens(neverUsedSkills.reduce((sum, skill) => sum + skill.listingChars, 0)),
       fix: 'set each to off in skillOverrides, or delete the ones you do not recognise',
       actions: neverUsedSkills
@@ -606,7 +739,7 @@ export function buildLedger(
           skillAction(
             skill,
             'off',
-            `${skill.name} has not been invoked in ${sessions.length} sessions, by you or by the model.`,
+            `${skill.name} has not been invoked in ${overSessions(fileSessions)}, by you or by the model.`,
           ),
         )
         .filter((action): action is FixAction => action !== null),
@@ -623,6 +756,7 @@ export function buildLedger(
     share: share(measure.agents.tokens),
     calls: null,
     perCall: null,
+    basis: null,
     verdict: { kind: 'not-attributable', why: 'agent listings are not separable from the prompt' },
     fix: null,
   });
@@ -636,6 +770,7 @@ export function buildLedger(
     share: share(measure.memory.tokens),
     calls: null,
     perCall: null,
+    basis: null,
     verdict: {
       kind: 'not-attributable',
       why: 'the model reads these, it does not call them, so no log can say which lines were used',
@@ -649,6 +784,7 @@ export function buildLedger(
   return {
     cwd: config.cwd,
     actions: mergeActions(findings.flatMap((finding) => finding.actions)),
+    machine: machineTotals(evidence, allSessions),
     reconciliation: {
       total,
       window: windowLabel,
@@ -664,4 +800,13 @@ export function buildLedger(
   };
 }
 
-export type { Finding, Ledger, LedgerRow, Reconciliation, RowKind, Verdict } from './types.js';
+export type {
+  EvidenceScope,
+  Finding,
+  Ledger,
+  LedgerRow,
+  MachineEvidence,
+  Reconciliation,
+  RowKind,
+  Verdict,
+} from './types.js';

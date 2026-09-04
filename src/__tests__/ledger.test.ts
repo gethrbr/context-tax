@@ -691,3 +691,158 @@ describe('the actions behind a finding', () => {
     ]);
   });
 });
+
+/* ---------------------------------------------------------------------------------------- */
+
+describe('the denominator matches the blast radius of the fix', () => {
+  /** Twelve more sessions, in a sibling checkout the fix would also reach. */
+  const sibling = Array.from({ length: 12 }, (_, index) =>
+    session({
+      sessionId: `o${index}`,
+      cwd: '/other',
+      firstSeen: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+    }),
+  );
+  const userScope = server({
+    scope: 'user',
+    path: '/home/u/.claude.json',
+    fixLever: {
+      kind: 'claude-mcp-remove',
+      command: 'claude mcp remove srv -s user',
+      scope: 'user',
+      path: '/home/u/.claude.json',
+    },
+  });
+  const busyNextDoor = [
+    project({ cwd: ROOT, mcpServers: {} }),
+    project({ cwd: '/other', mcpServers: { srv: { calls: 200, sessions: 12, tools: { one: 200 } } } }),
+  ];
+
+  it('🚨 will not recommend a machine-wide removal for a server that is busy in another repo', () => {
+    // The bug this whole change exists for, found on a real machine: one call in 152 sessions
+    // here, 67 in a sibling repo, and `claude mcp remove -s user` printed against it. That command
+    // is machine-wide, so a project-scoped silence can never justify it.
+    const ledger = buildLedger(
+      resolveResult([userScope]),
+      measureResult([measured()]),
+      evidence([...twelveSessions, ...sibling], busyNextDoor),
+    );
+
+    // Narrowed to the server-level finding on purpose. The per-tool prune finding legitimately
+    // fires here \u2014 `two` really has never been called \u2014 and it recommends asking for a narrower
+    // tool set, not running a machine-wide removal. Asserting on the substring alone caught it and
+    // would have made this test pass for the wrong reason.
+    expect(ledger.findings.some((finding) => finding.headline.startsWith('srv costs'))).toBe(false);
+    expect(ledger.findings.some((finding) => finding.fix?.includes('claude mcp remove'))).toBe(false);
+    const row = ledger.rows.find((entry) => entry.label === 'srv');
+    expect(row?.calls).toBe(200);
+    expect(row?.verdict.kind).toBe('earning-it');
+  });
+
+  it('says so on the row when it counted the whole machine', () => {
+    const ledger = buildLedger(
+      resolveResult([userScope]),
+      measureResult([measured()]),
+      evidence([...twelveSessions, ...sibling], busyNextDoor),
+    );
+
+    const verdict = ledger.rows.find((entry) => entry.label === 'srv')?.verdict;
+    expect(verdict).toMatchObject({ kind: 'earning-it', scope: 'machine', sessions: 24 });
+  });
+
+  it('carries the scope into the finding, not only onto the row', () => {
+    // The loud verdicts never reach `verdictLine`; they are rewritten as findings. A scope that
+    // showed up on the table and not in the sentence recommending the fix would be worse than
+    // useless, because the sentence is the part anybody acts on.
+    const idleEverywhere = [project({ cwd: ROOT }), project({ cwd: '/other' })];
+    const ledger = buildLedger(
+      resolveResult([userScope]),
+      measureResult([measured()]),
+      evidence([...twelveSessions, ...sibling], idleEverywhere),
+    );
+
+    const finding = ledger.findings.find((entry) => entry.headline.startsWith('srv costs'));
+    expect(finding?.detail).toContain('24 sessions on this machine');
+  });
+
+  it('keeps this project as the denominator when the fix only touches this project', () => {
+    // Same sibling traffic, but `disabledMcpjsonServers` writes to this repo's settings and stops
+    // the server here only. Silence here is then exactly the right evidence, and widening would
+    // suppress a true finding.
+    const ledger = buildLedger(
+      resolveResult([server()]),
+      measureResult([measured()]),
+      evidence([...twelveSessions, ...sibling], busyNextDoor),
+    );
+
+    const verdict = ledger.rows.find((entry) => entry.label === 'srv')?.verdict;
+    expect(verdict).toMatchObject({ kind: 'never-called', scope: 'project', sessions: 12 });
+  });
+});
+
+describe('a project with no history of its own', () => {
+  const elsewhere = Array.from({ length: 12 }, (_, index) =>
+    session({
+      sessionId: `o${index}`,
+      cwd: '/other',
+      coldStartTokens: 90_000,
+      firstSeen: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+    }),
+  );
+
+  it('🚨 borrows the machine denominator instead of printing a row of dashes', () => {
+    // The most likely first run there is: a fresh clone, or any directory the reader has not used
+    // Claude Code in. Every column that carries the argument \u2014 calls, per call \u2014 used to come out
+    // empty while the history to fill them sat on the same disk.
+    const ledger = buildLedger(
+      resolveResult([server()]),
+      measureResult([measured()]),
+      evidence(elsewhere, [
+        project({ cwd: '/other', mcpServers: { srv: { calls: 4, sessions: 2, tools: { one: 4 } } } }),
+      ]),
+    );
+
+    const row = ledger.rows.find((entry) => entry.label === 'srv');
+    expect(row?.calls).toBe(4);
+    expect(row?.perCall).not.toBeNull();
+    expect(row?.verdict).toMatchObject({ scope: 'machine' });
+  });
+
+  it('🚨 does not borrow a total, because a cold start from another config is not this prefix', () => {
+    // The denominator widens; the exact number never does. A median cold start taken across repos
+    // with different servers and different memory files is not what a turn costs *here*, and
+    // printing it under `EVERY TURN` would be the one number on the screen that is not exact.
+    const ledger = buildLedger(
+      resolveResult([server()]),
+      measureResult([measured()]),
+      evidence(elsewhere, [project({ cwd: '/other' })]),
+    );
+
+    expect(ledger.reconciliation.total).toBeNull();
+    expect(ledger.reconciliation.unattributed).toBeNull();
+  });
+});
+
+describe('the machine line', () => {
+  it('counts subagent turns, which were billed, but not as sessions a human started', () => {
+    const ledger = buildLedger(
+      resolveResult([]),
+      measureResult([]),
+      evidence(
+        [
+          session({ turns: 100, contextTokens: 1_000 }),
+          session({ sessionId: 'sub', kind: 'subagent', turns: 40, contextTokens: 400 }),
+        ],
+        [project({ slashCommands: { clear: 7, compact: 3, 'git-acp': 2 } })],
+      ),
+    );
+
+    expect(ledger.machine).toEqual({
+      sessions: 1,
+      turns: 140,
+      contextTokens: 1_400,
+      clears: 7,
+      compacts: 3,
+    });
+  });
+});

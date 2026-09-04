@@ -15,11 +15,25 @@
 
 import type { FixAction } from '../fix/types.js';
 
+/**
+ * Which body of session history a verdict's denominator was counted over.
+ *
+ * 🔑 **It is chosen to match the blast radius of the fix, never the convenience of the number.**
+ * `claude mcp remove <name> -s user` takes a server out of every project on this machine, so it
+ * may only be recommended on machine-wide silence. A server idle in this repo and busy in the one
+ * next door is not dead, and calling it dead on a project-scoped count would be the worst mistake
+ * this tool could make: it would hand you a command that breaks work you are still doing.
+ *
+ * `'project'` is the default and is left unsaid on screen, because a directory-scoped count is
+ * what this tool has always meant. `'machine'` is always said out loud.
+ */
+export type EvidenceScope = 'project' | 'machine';
+
 export type Verdict =
   /** Measured, and called. The denominator is still printed, because a reader should check it. */
-  | { kind: 'earning-it'; calls: number; sessions: number; window: string }
+  | { kind: 'earning-it'; calls: number; sessions: number; window: string; scope: EvidenceScope }
   /** Zero calls across a window we can defend. The only verdict that recommends removal. */
-  | { kind: 'never-called'; sessions: number; window: string }
+  | { kind: 'never-called'; sessions: number; window: string; scope: EvidenceScope }
   /**
    * Called, but so rarely that the standing cost dwarfs the use. The verdict the plan's cost floor
    * asks for: a server used once in 115 sessions is not earning its place just because it is not
@@ -37,14 +51,15 @@ export type Verdict =
        * an upper bound, and the output says so rather than quietly presenting it as exact.
        */
       window: 'since it was configured' | 'on record';
+      scope: EvidenceScope;
     }
   /**
    * Zero calls, but nothing on disk records when this arrived, so the count proves nothing.
    * Handed back to the reader rather than dressed up as a finding.
    */
-  | { kind: 'never-called-age-unknown'; sessions: number; why: string }
+  | { kind: 'never-called-age-unknown'; sessions: number; why: string; scope: EvidenceScope }
   /** Too few sessions since it was configured for silence to mean anything yet. */
-  | { kind: 'too-new'; sessions: number }
+  | { kind: 'too-new'; sessions: number; scope: EvidenceScope }
   /** It could not start. It costs nothing and it does nothing, which is its own finding. */
   | { kind: 'broken'; reason: string }
   /** We chose not to start it, so there is no cost to report. Not a judgement of the server. */
@@ -82,6 +97,15 @@ export interface LedgerRow {
    * by three or four orders of magnitude, which is the difference between a shrug and a decision.
    */
   perCall: number | null;
+  /**
+   * How the number was arrived at, when it did not come from starting the server here.
+   *
+   * A row measured from the bundled fallback table prints the same dash as a row that could not be
+   * measured at all, and the two are not the same thing. `measure` has always said which; the main
+   * screen did not, so the one command most people run was the one that explained the least.
+   * `null` whenever the figure came from this machine, which needs no caveat.
+   */
+  basis: string | null;
   verdict: Verdict;
   /** How you would turn it off, in words. M5 executes these. */
   fix: string | null;
@@ -134,11 +158,35 @@ export interface Reconciliation {
   overAttributed: boolean;
 }
 
+/**
+ * The whole machine, not this directory.
+ *
+ * Two jobs. It supplies the denominator when this project has too little history to judge
+ * anything, and it is the only place the tool can state the scale of what it is talking about:
+ * a per-turn figure means very little until you know how many turns there have been.
+ */
+export interface MachineEvidence {
+  /** Sessions a human started. Subagent transcripts are billed work but they are not sessions. */
+  sessions: number;
+  /** Every turn on the machine, subagents included, because every one of them was billed. */
+  turns: number;
+  /** Sum of `input + cache_creation + cache_read` over every turn on the machine. Exact. */
+  contextTokens: number;
+  /**
+   * `/clear` and `/compact`, counted because they are the user's own record of hitting the wall
+   * this tool is about. Unfiltered built-ins, which is why they are counted here and not joined
+   * against the resolved skill set like every other slash command.
+   */
+  clears: number;
+  compacts: number;
+}
+
 export interface Ledger {
   cwd: string;
   /** Every finding's actions, merged. `--fix` reads this and nothing else. */
   actions: FixAction[];
   reconciliation: Reconciliation;
+  machine: MachineEvidence;
   rows: LedgerRow[];
   findings: Finding[];
   /** Tokens per turn that the findings would recover between them. */

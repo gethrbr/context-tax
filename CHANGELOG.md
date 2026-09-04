@@ -4,6 +4,70 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **A progress line, because a run takes about ten seconds and every one of them was silent.** The
+  first byte of output used to be the finished report, so `npx context-tax` looked like a hang, and
+  the natural response to a hang is ctrl-C — which guarantees the reader never sees what the tool
+  does. It names the server it is waiting on rather than just spinning, which is also the clearest
+  possible evidence of the claim the tool rests on: it really does start your servers and perform
+  the handshake.
+
+  🔒 It writes to **stderr only, and only when stderr is a TTY**, so `--json`, `> file` and
+  `| less` are byte-for-byte what they were. Asserted at the import graph, not by eye: in a
+  terminal both streams land in the same window and a spinner on stdout looks perfectly fine right
+  up until somebody pipes the report somewhere.
+
+### Fixed
+
+- 🚨 **A machine-wide removal is no longer recommended on one project's silence.** A server whose
+  only lever is `claude mcp remove <name> -s user` was judged on the sessions in the current
+  directory tree, so a server idle here and busy in a sibling checkout was reported as barely used
+  and handed you a command that would have taken it out of both. Found on a real machine: one call
+  here, sixty-seven next door, and the removal printed anyway. A verdict's denominator now has to
+  cover everything its fix would switch off.
+
+### Changed
+
+- **The evidence pass reads the whole machine, not the current directory tree.** In a fresh clone,
+  or any directory you have not used Claude Code in, `share`, `calls` and `per call` all came out
+  empty and every verdict downgraded to "too few sessions to judge" — the three columns that carry
+  the argument, blank in the run a new reader is most likely to make first, while the history to
+  fill them sat on the same disk. A project with too little history now borrows the machine's
+  denominator and says `on this machine` wherever it did. The exact total does **not** widen: a
+  cold-start median mixed across projects with different configs is not this directory's prefix,
+  and it would be the one number on the screen that is not exact.
+
+  The scan was scoped to the tree on the stated grounds that a whole-corpus pass costs a minute.
+  Measured: 890 transcripts and 2.1 GB in 5.1s, inside a command that already spends ten seconds
+  starting MCP servers.
+
+- **The screen leads with the number instead of the method.** The report opened with four lines of
+  `chars/4` caveat before a single figure and kept its one exact number at the bottom of the table.
+  The headline now sits above the table and the methodology below it, next to the total it
+  qualifies. Nothing was removed.
+
+- **A line saying what this machine has actually spent**: sessions, turns, tokens of context
+  carried, and the `/clear` and `/compact` you typed. All of it was already computed and reachable
+  only through `context-tax evidence`, a subcommand documented as a development view.
+
+- Rows sharing a note are collapsed onto one line instead of repeating the same sentence.
+
+- A row measured from the bundled fallback table now says so on the main screen. It printed the
+  same bare dash as a row that could not be measured at all, and only `context-tax measure` told
+  you which.
+
+### Notes
+
+- `MeasureOptions` gained an optional `onProbe` notification. Nothing waits on it and nothing
+  branches on it; a caller that omits it gets byte-identical results.
+- The library surface changed: `Verdict` carries a required `scope`, `LedgerRow` a `basis`, and
+  `Ledger` a `machine`.
+- The README's screens are now regenerated from a fabricated fixture through the real renderer and
+  pinned by a test, so the claim that they cannot drift from the code is enforced rather than made.
+
 ## 0.1.1
 
 ### Fixed

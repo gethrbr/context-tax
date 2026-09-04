@@ -65,10 +65,10 @@ anything to be sent to.
 
 ```
   context-tax  ~/projects/storefront
-  token counts are chars/4, measured within 4%; a server's schemas are counted
-  whole, which is what you pay only if your client does not defer them
-  tokens: what every turn carries. deferred: the schemas behind it, paid when
-  something loads them.
+  on this machine: 96 sessions, 42,900 turns, 1.7B tokens of context carried.
+  You typed /clear 118, /compact 31.
+
+  40,000 tokens on every turn, 2,400 of them recoverable from 5 findings below.
 
   ┌───────────────────────┬──────────┬───────────┬────────┬────────┬───────────┐
   │ MCP SERVERS           │   tokens │  deferred │  share │  calls │  per call │
@@ -86,11 +86,18 @@ anything to be sent to.
   │ unattributed          │   31,200 │           │    78% │        │           │
   │ EVERY TURN            │   40,000 │           │   100% │        │           │
   └───────────────────────┴──────────┴───────────┴────────┴────────┴───────────┘
-    postgres: configured but off, so it was not started to find out
+    postgres: configured but off, so nothing was started to measure
+    14 skills: a skill listing is one line each; the useful unit is the skill,
+      below
     11 agents: agent listings are not separable from the prompt
-    2 memory files: memory files are read by the model, not called by it
+    2 memory files: the model reads these, it does not call them, so no log
+      can say which lines were used
     EVERY TURN is exact, from usage. Median cold start across your 10 most
-    recent sessions.
+    recent sessions, 2026-08-24 to 2026-09-01.
+    token counts are chars/4, measured within 4%; a server's schemas are counted
+    whole, which is what you pay only if your client does not defer them.
+    tokens: what every turn carries. deferred: the schemas behind it, paid when
+    something loads them.
 
   FINDINGS
     1. figma costs 800 tokens every turn and has never been called
@@ -104,7 +111,8 @@ anything to be sent to.
        you have never used waits behind them.
        fix: MCP has no per-tool switch. Ask the server for a narrower tool set,
        or drop the server.
-    3. linear is loaded on every turn and used in 3 of 96 sessions
+    3. linear is loaded on every turn and used in 3 of 96 sessions on this
+       machine
        800 tokens re-sent across 42,900 turns for 3 calls: 11,440,000 tokens of
        standing cost per use. Loading its schemas costs 2,040 tokens more, every
        time something does.
@@ -206,7 +214,8 @@ describes, so what you confirm is the diff itself.
     that file nor backs it up: a backup would be a second copy of every
     credential.
 
-    linear: 3 calls in 96 sessions, 11,440,000 tokens of standing cost per use.
+    linear: 3 calls in 96 sessions on this machine, 11,440,000 tokens of
+    standing cost per use.
     It is declared in ~/.claude.json, which this tool does not write.
       claude mcp remove linear -s user
 
@@ -306,13 +315,17 @@ Four passes and one join, kept apart because they fail differently.
 |:--|:--|:--|
 | `resolve/` | What is loaded here: the settings chain, `.mcp.json`, `~/.claude.json`, plugins, skills, agents, memory | Exact, but incomplete |
 | `measure/` | What it weighs. Performs the same `initialize` then `tools/list` handshake your agent performs at session start, against the servers already in your config, over stdio, streamable HTTP or legacy SSE | Estimated |
-| `evidence/` | What you called. Parses your local transcripts for `tool_use` blocks and `usage` | Exact, it is what you were billed |
+| `evidence/` | What you called. Parses every local transcript for `tool_use` blocks and `usage`, machine-wide, so a directory with no history of its own still has a denominator | Exact, it is what you were billed |
 | `ledger/` | The multiplication, and a verdict per row | The join |
 
 To measure a server you have to start it. So `measure` prints every host it spoke to, caches schemas
 for a week keyed on the **names** of your environment variables and never their values, and **will
 not start a project server from a directory you are not standing in**, since running one executes
 code from a repo you only pointed at.
+
+Starting them is also where the ten seconds goes, so a run tells you which server it is waiting on
+while it waits. That line is written to stderr and only when stderr is a terminal, so `--json`,
+`> file` and `| less` carry the report and nothing else.
 
 <br>
 
@@ -329,6 +342,21 @@ verdict.
 Every verdict carries the window it was reached over, and prints it: *0 calls in 96 sessions since
 it was configured*, never a bare "unused". `neverCalled` is unreachable in the type system without
 one.
+
+</details>
+
+<details>
+<summary><b>The denominator covers everything the fix would switch off</b></summary>
+<br>
+
+`claude mcp remove <name> -s user` takes a server out of **every** project on the machine, so it is
+never recommended on one project's silence: a server idle in this repo and busy in the one next door
+is not dead, and that command would break work you are still doing. Machine-wide levers are judged
+on machine-wide evidence, project-scoped levers on this project's, and a project with too little
+history to judge anything borrows the machine's rather than printing a row of dashes.
+
+Whenever a count came from more than this directory, the row says **on this machine**. Silence means
+the project, which is what every number here has always meant.
 
 </details>
 
@@ -404,6 +432,9 @@ This tool reads local files and starts the MCP servers you have already configur
 whole of its network activity, and all of it is to hosts you chose.
 
 - **No telemetry.** There is no endpoint to send it to.
+- **It reads every transcript under `~/.claude/projects`, and none of it leaves.** The whole corpus
+  is read so a project with no history of its own can still be given a denominator. It is a local
+  read of files you already have: nothing is uploaded, cached off-machine or written back.
 - **No model call.** Every verdict is arithmetic.
 - **No credentials read or copied.** Schema caching is keyed on the *names* of environment
   variables, never their values, and `~/.claude.json` is never written or backed up.
