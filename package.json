@@ -1,6 +1,6 @@
 {
   "name": "context-tax",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "What your coding agent's context costs you every turn, and which of it you never used.",
   "type": "module",
   "license": "MIT",
