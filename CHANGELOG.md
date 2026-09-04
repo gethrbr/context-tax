@@ -21,6 +21,12 @@ All notable changes to this project are documented here. The format follows
   `trust.ts` so that it can be tested at all: it lived in `index.ts`, which dispatches at module
   scope and therefore cannot be imported by a test.
 
+- **A fix no longer names a file you cannot open.** The line telling you which settings file to
+  edit was clamped at three lines like the diagnostic prose above it, so a long path lost its tail
+  to an `…` — the actionable half of the one actionable line. The path is now printed whole,
+  `$HOME` is collapsed to `~` so the usual one fits on a single line, and a path too long even for
+  that starts on its own line instead of trailing off the end of a sentence.
+
 ## 0.2.0
 
 ### Added

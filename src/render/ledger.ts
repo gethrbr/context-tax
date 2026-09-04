@@ -23,7 +23,7 @@ import type {
 } from '../ledger/types.js';
 import { PROVISIONAL_NOTE } from '../measure/tokens.js';
 import type { Palette } from './color.js';
-import { hangingText, screenWidth, shortPath, wrapClamped } from './layout.js';
+import { hangingText, screenWidth, shortPath, wrapClamped, wrapInstruction } from './layout.js';
 import type { Cell, Column, Section } from './table.js';
 import { renderTable } from './table.js';
 
@@ -166,7 +166,10 @@ function renderFinding(finding: Finding, index: number, colour: Palette, width: 
     out.push(`${'       '}${colour.dim(part)}`);
   }
   if (finding.fix !== null) {
-    for (const part of wrapClamped(`fix: ${finding.fix}`, width - 7, 3)) {
+    // 🚨 Not clamped, unlike the detail above it. A fix is the one line on the screen the reader
+    // is meant to act on, and the path is the end of it, so a three-line cap ellipsised away the
+    // only part that mattered. `wrapInstruction` keeps the path whole and pasteable.
+    for (const part of wrapInstruction(`fix: ${finding.fix}`, width - 7)) {
       out.push(`${'       '}${colour.cyan(part)}`);
     }
   }

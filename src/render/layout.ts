@@ -77,6 +77,44 @@ export function wrapClamped(text: string, width: number, maxLines: number): stri
   return kept;
 }
 
+/** `$HOME` is noise in every path this tool prints, and it is the half that never varies. */
+export function shortenHome(text: string, home = homedir()): string {
+  if (home.length <= 1) return text;
+  const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(`${escaped}(?=/|\\s|$)`, 'g'), '~');
+}
+
+/** A word that is a path, and therefore a word that must not be broken. */
+const PATH_LIKE = /^(?:~|\/)\S*$/;
+
+/**
+ * Wrap an instruction whose last word is the file you are being told to edit.
+ *
+ * 🚨 A fix line is the one line on the screen the reader is meant to act on, and it was clamped
+ * like the diagnostic prose above it: three lines, then an `…`. What the `…` ate was the path.
+ * The instruction that survived named a file the reader could not open, which is worse than no
+ * instruction. Nothing here is elided, and nothing needs to be: unlike a server's failure reason,
+ * which is a wall of JSON and stays clamped, a fix is tool-authored prose plus one path.
+ *
+ * Two things make that affordable. `$HOME` is collapsed to `~`, which is most of the width back
+ * on a real machine and puts the usual path on one line; and a path too long even for that starts
+ * on its own line, so its fragments align instead of trailing off the end of a sentence. It is
+ * still hard wrapped rather than allowed to overhang, because every screen fitting the window it
+ * was given is a promise this file exists to keep.
+ */
+export function wrapInstruction(text: string, width: number, home = homedir()): string[] {
+  const shortened = shortenHome(text, home);
+  const words = shortened.split(/\s+/).filter((part) => part.length > 0);
+  const path = words[words.length - 1];
+  // A path that fits is already safe: the greedy wrap never splits a word it has room for. Leaving
+  // that case alone is what keeps every screen that renders today byte-identical.
+  if (path === undefined || !PATH_LIKE.test(path) || path.length <= width) {
+    return wrapText(shortened, width);
+  }
+  const head = words.slice(0, -1).join(' ');
+  return [...(head.length > 0 ? wrapText(head, width) : []), ...wrapText(path, width)];
+}
+
 /** A horizontal rule, which is what turns aligned numbers into a table the eye reads as one. */
 export function rule(width: number): string {
   return '─'.repeat(Math.max(0, width));
