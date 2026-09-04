@@ -54,6 +54,14 @@ export interface MeasureOptions {
   trustProjectServers?: boolean;
   /** Injectable so tests do not depend on the clock. */
   now?: number;
+  /**
+   * Called when a server's handshake begins and again when it settles.
+   *
+   * Only so the CLI can say what the wait is for. It is deliberately a notification and not a
+   * hook: nothing here waits on it, nothing branches on it, and a caller that omits it gets
+   * byte-identical results.
+   */
+  onProbe?: (event: { kind: 'start' | 'settle'; name: string }) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -128,6 +136,7 @@ export async function measureContext(
   const cacheDir = options.cacheDir ?? defaultCacheDir();
   const now = options.now ?? Date.now();
   const trustProject = options.trustProjectServers ?? true;
+  const onProbe = options.onProbe;
 
   const contacted: string[] = [];
   const spawned: string[] = [];
@@ -181,7 +190,7 @@ export async function measureContext(
       estimate() ?? unmeasured(server.name, reason, cause);
 
     if (!spawnAllowed) return declined('not started (--no-spawn), and not in the fallback table');
-    if (!server.enabled) return declined('configured but off, so it was not started to find out');
+    if (!server.enabled) return declined('configured but off, so nothing was started to measure');
     if (server.scope === 'project-mcp-json' && !trustProject) {
       return declined('declared by a .mcp.json outside the working directory, so it was not run');
     }
@@ -193,6 +202,7 @@ export async function measureContext(
       if (spec.transport === 'stdio') spawned.push(spec.command ?? server.name);
       else if (spec.url !== null) contacted.push(new URL(spec.url).host);
 
+      onProbe?.({ kind: 'start', name: server.name });
       try {
         const result = await probeServer(spec, timeoutMs);
         const tools = result.tools.map((tool) => ({
@@ -222,6 +232,10 @@ export async function measureContext(
         // `failed` rather than `declined`: we asked and it could not answer, which means your
         // sessions get nothing from it either. That is a verdict, not a gap in our data.
         return declined(error instanceof Error ? error.message : String(error), 'failed');
+      } finally {
+        // In `finally` so a server that times out or throws still clears itself from the label.
+        // A spinner that keeps naming a server which gave up ten seconds ago is worse than none.
+        onProbe?.({ kind: 'settle', name: server.name });
       }
     })();
 

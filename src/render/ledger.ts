@@ -13,7 +13,14 @@
  * aligned; it was the sentences under them that ran off the edge and wrapped back to column 0.
  */
 
-import type { Finding, Ledger, LedgerRow, Verdict } from '../ledger/types.js';
+import type {
+  EvidenceScope,
+  Finding,
+  Ledger,
+  LedgerRow,
+  MachineEvidence,
+  Verdict,
+} from '../ledger/types.js';
 import { PROVISIONAL_NOTE } from '../measure/tokens.js';
 import type { Palette } from './color.js';
 import { hangingText, screenWidth, shortPath, wrapClamped } from './layout.js';
@@ -76,6 +83,14 @@ function columnsFor(width: number): Column[] {
   ];
 }
 
+/**
+ * Where a denominator was counted, said only when it is wider than this directory.
+ *
+ * Silence means the project, because a directory-scoped count is what every number on this screen
+ * has always meant and annotating the default would make the common line longer to say nothing.
+ */
+const where = (scope: EvidenceScope): string => (scope === 'machine' ? ' on this machine' : '');
+
 /** The one-line reason a row got its verdict. Always carries its denominator. */
 function verdictLine(verdict: Verdict): { text: string; loud: boolean } | null {
   switch (verdict.kind) {
@@ -84,26 +99,26 @@ function verdictLine(verdict: Verdict): { text: string; loud: boolean } | null {
     case 'rarely-called':
       return {
         text:
-          `${n(verdict.calls)} call${verdict.calls === 1 ? '' : 's'} in ${n(verdict.sessions)} sessions ` +
-          `${verdict.window}: ${n(verdict.perCall)} tokens of standing cost for each one` +
+          `${n(verdict.calls)} call${verdict.calls === 1 ? '' : 's'} in ${n(verdict.sessions)} sessions` +
+          `${where(verdict.scope)} ${verdict.window}: ${n(verdict.perCall)} tokens of standing cost for each one` +
           (verdict.window === 'on record' ? ', an upper bound since its age is unknown' : ''),
         loud: true,
       };
     case 'never-called':
       return {
-        text: `never called: 0 calls in ${n(verdict.sessions)} sessions ${verdict.window}`,
+        text: `never called: 0 calls in ${n(verdict.sessions)} sessions${where(verdict.scope)} ${verdict.window}`,
         loud: true,
       };
     case 'never-called-age-unknown':
       return {
         text:
-          `0 calls in ${n(verdict.sessions)} sessions on record, but ${verdict.why}, ` +
+          `0 calls in ${n(verdict.sessions)} sessions${where(verdict.scope)} on record, but ${verdict.why}, ` +
           'so this is not evidence that it is old',
         loud: false,
       };
     case 'too-new':
       return {
-        text: `only ${n(verdict.sessions)} sessions since it was configured, too few to judge`,
+        text: `only ${n(verdict.sessions)} session${verdict.sessions === 1 ? '' : 's'}${where(verdict.scope)} since it was configured, too few to judge`,
         loud: false,
       };
     case 'broken':
@@ -167,6 +182,49 @@ function renderFinding(finding: Finding, index: number, colour: Palette, width: 
  * table. `null` tokens are deliberately excluded: null means we could not measure it, which is a
  * real cost with an unknown size, and that run has something to show.
  */
+/**
+ * The scale line: what this machine has actually spent, not what this directory loads.
+ *
+ * A per-turn figure means very little on its own. Two hundred thousand turns is the number that
+ * makes a per-turn figure land, and it was sitting in the evidence pass, which is a subcommand
+ * labelled as a development view that almost nobody will run.
+ *
+ * `/clear` and `/compact` ride along when they exist because they are the reader's own record of
+ * hitting the wall this tool is about, counted from what they typed rather than inferred.
+ */
+function machineLine(machine: MachineEvidence): string {
+  if (machine.sessions === 0) return 'no session history on this machine yet.';
+  const parts = [
+    `${n(machine.sessions)} session${machine.sessions === 1 ? '' : 's'}`,
+    `${n(machine.turns)} turns`,
+    `${compact(machine.contextTokens)} tokens of context carried`,
+  ];
+  const typed: string[] = [];
+  if (machine.clears > 0) typed.push(`/clear ${n(machine.clears)}`);
+  if (machine.compacts > 0) typed.push(`/compact ${n(machine.compacts)}`);
+  return (
+    `on this machine: ${parts.join(', ')}.` + (typed.length > 0 ? ` You typed ${typed.join(', ')}.` : '')
+  );
+}
+
+/**
+ * One line, above the table, in the units the reader pays in.
+ *
+ * Falls back to what was measured here when no session in this directory recorded a cold start,
+ * because a headline is not worth inventing a total for: `attributed` is what the rows add up to
+ * and it is the honest number when there is nothing exact to reconcile against.
+ */
+function headline(ledger: Ledger): string {
+  const { total, attributed } = ledger.reconciliation;
+  const lead =
+    total === null
+      ? `${n(attributed)} tokens of context measured here`
+      : `${n(total)} tokens on every turn`;
+  if (ledger.recoverable <= 0) return `${lead}, and nothing on this screen is unused.`;
+  const count = ledger.findings.length;
+  return `${lead}, ${n(ledger.recoverable)} of them recoverable from ${count} finding${count === 1 ? '' : 's'} below.`;
+}
+
 function nothingToMeasure(ledger: Ledger): boolean {
   return (
     ledger.rows.every((row) => row.kind !== 'mcp-server' && row.tokens === 0) &&
@@ -229,12 +287,14 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
     return out.join('\n');
   }
 
-  say(PROVISIONAL_NOTE, 2, colour.dim);
-  say(
-    'tokens: what every turn carries. deferred: the schemas behind it, paid when something loads them.',
-    2,
-    colour.dim,
-  );
+  // \u{1F511} The number first, the method underneath it. This screen used to open with four lines of
+  // `chars/4` caveat before a single figure, and put the one exact number it has \u2014 the billed
+  // total \u2014 at the bottom of the table. The methodology has not been softened or moved off the
+  // screen; it sits under the table next to the total it qualifies, which is where a reader
+  // checking it would look anyway.
+  say(machineLine(ledger.machine), 2, colour.dim);
+  line();
+  say(headline(ledger), 2, colour.bold);
 
   /* ---------------------------------------------------------------------------------------- */
 
@@ -282,10 +342,26 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
 
   // The quiet verdicts: why a row has no number, or why its calls cannot be counted. The loud ones
   // are not repeated here, because each of them is a finding below with a recommendation attached.
+  //
+  // Rows sharing a note are collapsed onto one line. Two servers from the same switched-off plugin
+  // printed the same sentence twice, which spends two lines of a small screen to say one thing and
+  // makes a clean table look like a list of problems.
+  const notes = new Map<string, string[]>();
+  const note = (text: string, label: string): void => {
+    const labels = notes.get(text);
+    if (labels === undefined) notes.set(text, [label]);
+    else labels.push(label);
+  };
   for (const row of ledger.rows) {
     const verdict = verdictLine(row.verdict);
-    if (verdict === null || verdict.loud) continue;
-    for (const part of hangingText(`${row.label}: ${verdict.text}`, width, 4, 2)) {
+    if (verdict !== null && !verdict.loud) note(verdict.text, row.label);
+    // Where the figure came from, when it did not come from here. A row measured off the bundled
+    // table prints the same dash as one that could not be measured at all, and `measure` was the
+    // only screen that said which \u2014 so the command almost nobody runs explained the most.
+    if (row.basis !== null) note(row.basis, row.label);
+  }
+  for (const [text, labels] of notes) {
+    for (const part of hangingText(`${labels.join(', ')}: ${text}`, width, 4, 2)) {
       line(colour.dim(part));
     }
   }
@@ -321,6 +397,12 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
       colour.dim,
     );
   }
+  say(
+    `${PROVISIONAL_NOTE}. tokens: what every turn carries. deferred: the schemas behind it, paid` +
+      ' when something loads them.',
+    4,
+    colour.dim,
+  );
 
   /* ---------------------------------------------------------------------------------------- */
 

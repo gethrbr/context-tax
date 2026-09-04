@@ -7,7 +7,13 @@
  * with it. Both were invisible to a test suite that only ever asserted on substrings.
  */
 
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
+
+import { readmeLedger } from './fixtures/readme-ledger.js';
 
 import type { Ledger } from '../ledger/types.js';
 import type { MeasureResult } from '../measure/types.js';
@@ -28,6 +34,7 @@ function ledgerFixture(): Ledger {
   return {
     cwd: '/Users/somebody/a/deeply/nested/checkout/of/a/repository/with/a/long/name',
     actions: [],
+    machine: { sessions: 128, turns: 41_808, contextTokens: 8_912_004_331, clears: 172, compacts: 22 },
     reconciliation: {
       total: 55_065,
       attributed: 12_275,
@@ -45,12 +52,14 @@ function ledgerFixture(): Ledger {
         share: 0.03,
         calls: 7,
         perCall: 6_921_651,
+        basis: null,
         verdict: {
           kind: 'rarely-called',
           calls: 7,
           sessions: 122,
           perCall: 6_921_651,
           window: 'since it was configured',
+          scope: 'project',
         },
         fix: null,
       },
@@ -62,6 +71,7 @@ function ledgerFixture(): Ledger {
         share: null,
         calls: 0,
         perCall: null,
+        basis: null,
         verdict: { kind: 'broken', reason: JSON_ERROR },
         fix: null,
       },
@@ -73,6 +83,7 @@ function ledgerFixture(): Ledger {
         share: 0.04,
         calls: null,
         perCall: null,
+        basis: null,
         verdict: {
           kind: 'not-attributable',
           why: 'the model reads these, it does not call them, so no log can say which lines were used',
@@ -346,5 +357,143 @@ describe('a machine with nothing on it', () => {
     expect(screen).toContain('NOTHING TO MEASURE HERE');
     expect(screen).toContain('PROBLEMS');
     expect(screen).toContain('unsupported_protocol_version');
+  });
+});
+
+/* ---------------------------------------------------------------------------------------- */
+
+/**
+ * The order the screen makes its case in, and the one thing it must never leave unsaid: which
+ * body of history a number was counted over.
+ */
+describe('what the screen leads with', () => {
+  it('puts the number above the table and the method below it', () => {
+    const screen = renderLedger(ledgerFixture(), plain, 80);
+    const headline = screen.indexOf('55,065 tokens on every turn');
+    const grid = screen.indexOf('┌');
+    const method = screen.indexOf('token counts are chars/');
+
+    expect(headline).toBeGreaterThan(-1);
+    // 🚨 The screen used to open with four lines of caveat and keep its one exact number at the
+    // bottom of the table. Both are still on the screen; only the order changed.
+    expect(headline).toBeLessThan(grid);
+    expect(method).toBeGreaterThan(grid);
+  });
+
+  it('states the scale of the machine, which is what makes a per-turn figure land', () => {
+    const screen = renderLedger(ledgerFixture(), plain, 80);
+    expect(screen).toContain('128 sessions');
+    expect(screen).toContain('41,808 turns');
+    // The reader's own record of hitting the wall this tool is about.
+    expect(screen).toContain('/clear 172');
+    expect(screen).toContain('/compact 22');
+  });
+
+  it('says nothing about clears on a machine where none were typed', () => {
+    const base = ledgerFixture();
+    const screen = renderLedger(
+      { ...base, machine: { ...base.machine, clears: 0, compacts: 0 } },
+      plain,
+      80,
+    );
+    expect(screen).not.toContain('You typed');
+  });
+
+  it('claims nothing is recoverable rather than printing a recoverable zero', () => {
+    const base = ledgerFixture();
+    const screen = renderLedger({ ...base, recoverable: 0, findings: [] }, plain, 80);
+    expect(screen).toContain('nothing on this screen is unused');
+  });
+});
+
+describe('the denominator is always named', () => {
+  /** A short label on purpose, so the note under the table does not wrap mid-assertion. */
+  function withVerdict(verdict: Ledger['rows'][number]['verdict']): Ledger {
+    const base = ledgerFixture();
+    return { ...base, rows: [{ ...base.rows[0], label: 'srv', verdict }] };
+  }
+
+  // A quiet verdict, because the loud ones are routed to FINDINGS with a recommendation attached
+  // and never printed by `verdictLine`. The findings carry their own scope, pinned in ledger tests.
+  it('🚨 says "on this machine" when the count came from more than this directory', () => {
+    // Without this the reader cannot tell a project-scoped silence from a machine-wide one, and
+    // those two justify completely different fixes.
+    const screen = renderLedger(withVerdict({ kind: 'too-new', sessions: 3, scope: 'machine' }), plain, 80);
+    expect(screen).toContain('3 sessions on this machine since it was configured');
+  });
+
+  it('stays silent for a project count, which is what every number here has always meant', () => {
+    const screen = renderLedger(withVerdict({ kind: 'too-new', sessions: 3, scope: 'project' }), plain, 80);
+    // Asserted on the row's own note. The phrase appears elsewhere on every screen \u2014 the scale
+    // line, and the caveat about claude.ai connectors \u2014 so a whole-screen search proves nothing.
+    const note = screen.split('\n').find((row) => row.includes('srv: only 3 sessions'));
+    expect(note).toContain('3 sessions since it was configured');
+    expect(note).not.toContain('on this machine');
+  });
+});
+
+describe('the notes under the table', () => {
+  it('collapses rows that share a note onto one line', () => {
+    const base = ledgerFixture();
+    const off = (label: string): Ledger['rows'][number] => ({
+      ...base.rows[1],
+      label,
+      verdict: { kind: 'not-measured', reason: 'configured but off, so nothing was started to measure' },
+    });
+    // Invented names, per CONTRIBUTING: no real server from anybody's machine appears in this
+    // repository, in a test any more than in the README.
+    const screen = renderLedger(
+      { ...base, rows: [off('postgres-primary'), off('postgres-replica')] },
+      plain,
+      80,
+    );
+
+    expect(screen).toContain('postgres-primary, postgres-replica: configured but off');
+    // One line, not the same sentence printed twice.
+    expect(screen.split('configured but off').length - 1).toBe(1);
+  });
+
+  it('🚨 says when a number came from the bundled table rather than from this machine', () => {
+    // `measure` always said so; the ledger printed the same bare dash for "measured elsewhere" and
+    // "could not be measured", so the one command almost nobody runs explained the most.
+    const base = ledgerFixture();
+    const screen = renderLedger(
+      {
+        ...base,
+        rows: [{ ...base.rows[1], basis: 'from the bundled table (example.com), not your machine' }],
+      },
+      plain,
+      80,
+    );
+    expect(screen).toContain('from the bundled table');
+  });
+});
+
+/* ---------------------------------------------------------------------------------------- */
+
+/**
+ * 🔑 The README says its screens are "real renderer output, generated from a fixture, so the docs
+ * cannot drift from the code". That was true when it was written and nothing kept it true: the
+ * screens were pasted in by hand and the next change to the renderer would have silently made the
+ * front page of the project wrong. This is the test that turns the claim into a fact.
+ *
+ * 🔒 It doubles as the guard on the rule in CONTRIBUTING: the fixture is fabricated, so a
+ * screenshot regenerated from a real machine would fail here rather than reach a public README.
+ */
+describe('the README screen is the renderer, not a transcription', () => {
+  async function reportBlock(): Promise<string> {
+    const readme = await readFile(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'README.md'), 'utf8');
+    const after = readme.slice(readme.indexOf('## The report'));
+    const opened = after.indexOf('```\n') + 4;
+    return after.slice(opened, after.indexOf('\n```', opened));
+  }
+
+  it('matches, character for character, what the renderer produces from the fixture', async () => {
+    expect((await reportBlock()).trim()).toBe(renderLedger(readmeLedger(), plain, 80).trim());
+  });
+
+  it('has no absolute home directory in it, which is what a real run would leave behind', async () => {
+    const block = await reportBlock();
+    expect(block).not.toMatch(/\/(Users|home)\//);
   });
 });

@@ -30,6 +30,7 @@ import { colourEnabled, palette } from './render/color.js';
 import { renderConfig } from './render/config.js';
 import { renderApplied, renderPlan } from './render/fix.js';
 import { hangingText, screenWidth } from './render/layout.js';
+import { progress, startingLabel } from './render/progress.js';
 import { renderLedger } from './render/ledger.js';
 import { renderMeasure } from './render/measure.js';
 import { resolveConfig } from './resolve/index.js';
@@ -84,22 +85,49 @@ async function config(args: Args): Promise<void> {
 /**
  * The default command: cost joined against usage, with a verdict per row.
  *
- * It runs all three passes. The evidence scan is scoped to this directory tree, which is what
- * keeps the default command in the seconds rather than the minute a whole-corpus pass takes.
+ * It runs all three passes and the evidence pass reads **the whole machine**, not this directory
+ * tree. `buildLedger` re-filters by `cwd` for everything that is properly project-scoped, so the
+ * project view costs nothing to keep; what the wider scan buys is a denominator for the runs that
+ * previously had none.
+ *
+ * 🔑 This used to be scoped to the tree, on the stated grounds that a whole-corpus pass takes a
+ * minute. Measured 2026-09-04: 890 transcripts and 2.1 GB in 5.1s, inside a command that already
+ * spends ten seconds starting MCP servers. The cost was never the reason to be narrow, and being
+ * narrow is what made the first run in an unfamiliar directory print a table of dashes.
  */
 async function buildAll(args: Args): Promise<Ledger> {
-  const resolvedResult = await resolveConfig({ cwd: args.cwd });
-  const root = resolvedResult.config.repoRoot ?? resolvedResult.config.cwd;
-  const [measured, evidence] = await Promise.all([
-    measureContext(resolvedResult, {
-      spawn: args.spawn,
-      refresh: args.refresh,
-      timeoutMs: args.timeoutMs,
-      trustProjectServers: args.cwd === undefined || sameTree(resolvePath(args.cwd)),
-    }),
-    scanEvidence({ cwd: root }),
-  ]);
-  return buildLedger(resolvedResult, measured, evidence, { window: args.window });
+  const spinner = progress();
+  try {
+    spinner.set('reading your config');
+    const resolvedResult = await resolveConfig({ cwd: args.cwd });
+
+    /** Servers whose handshake is still open, so the label names what is actually being waited on. */
+    const running = new Set<string>();
+    spinner.set('reading your session history');
+    const [measured, evidence] = await Promise.all([
+      measureContext(resolvedResult, {
+        spawn: args.spawn,
+        refresh: args.refresh,
+        timeoutMs: args.timeoutMs,
+        trustProjectServers: args.cwd === undefined || sameTree(resolvePath(args.cwd)),
+        onProbe: ({ kind, name }) => {
+          if (kind === 'start') running.add(name);
+          else running.delete(name);
+          // Once every server has settled, the transcript scan is the only thing left running,
+          // so the label says that rather than falling back to a generic word.
+          spinner.set(running.size === 0 ? 'reading your session history' : startingLabel(running));
+        },
+      }),
+      scanEvidence(),
+    ]);
+
+    spinner.set('joining what it costs against what you called');
+    return buildLedger(resolvedResult, measured, evidence, { window: args.window });
+  } finally {
+    // 🔒 In `finally`, so a thrown error cannot leave a spinner frame sitting on the line the
+    // error message is about to be written to.
+    spinner.done();
+  }
 }
 
 async function ledger(args: Args): Promise<void> {
@@ -187,17 +215,25 @@ async function fix(args: Args): Promise<void> {
 }
 
 async function measure(args: Args): Promise<void> {
+  const spinner = progress();
+  const running = new Set<string>();
+  spinner.set('reading your config');
   const resolved = await resolveConfig({ cwd: args.cwd });
   const result = await measureContext(resolved, {
     spawn: args.spawn,
     refresh: args.refresh,
     timeoutMs: args.timeoutMs,
+    onProbe: ({ kind, name }) => {
+      if (kind === 'start') running.add(name);
+      else running.delete(name);
+      spinner.set(startingLabel(running));
+    },
     // 🚨 A project `.mcp.json` we are not standing in may not be started: running one executes
     // code from a directory the user only pointed at. Standing in the tree is consent, a flag is
     // not. Anywhere inside the tree counts, because running this from `packages/x` is still
     // running it in your own repo.
     trustProjectServers: args.cwd === undefined || sameTree(resolvePath(args.cwd)),
-  });
+  }).finally(() => spinner.done());
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ config: resolved.config, measure: result }, null, 2)}\n`);
     return;
@@ -208,8 +244,10 @@ async function measure(args: Args): Promise<void> {
 }
 
 async function evidence(args: Args): Promise<void> {
+  const spinner = progress();
+  spinner.set('reading your session history');
   const started = Date.now();
-  const scanned = await scanEvidence({ cwd: args.cwd });
+  const scanned = await scanEvidence({ cwd: args.cwd }).finally(() => spinner.done());
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 
   if (args.json) {
