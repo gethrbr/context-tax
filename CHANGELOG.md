@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- 🚨 **`--cwd` no longer runs a repository's servers because it happens to sit under the one you
+  are standing in.** Starting a project server executes whatever that repo's `.mcp.json` names, so
+  the rule has always been that standing in the directory is consent and a flag is not. The check
+  asked a looser question — is either path inside the other — and read `cd ~/projects &&
+  context-tax --cwd ./just-cloned` as the monorepo case, because the target was underneath the
+  working directory. Found by pointing 0.2.0 at seven freshly cloned repositories: one declared
+  `uvx arxiv-mcp-server` and the run tried to start it, thirty seconds after `git clone`. Trust is
+  now anchored on the project root the servers were resolved for, which keeps every real monorepo
+  case working — pointing up at the root from a package, or down at a package from the root — and
+  refuses a nested checkout, which is its own project and never yours. The rule moved into
+  `trust.ts` so that it can be tested at all: it lived in `index.ts`, which dispatches at module
+  scope and therefore cannot be imported by a test.
+
+- **A fix no longer names a file you cannot open.** The line telling you which settings file to
+  edit was clamped at three lines like the diagnostic prose above it, so a long path lost its tail
+  to an `…` — the actionable half of the one actionable line. The path is now printed whole,
+  `$HOME` is collapsed to `~` so the usual one fits on a single line, and a path too long even for
+  that starts on its own line instead of trailing off the end of a sentence.
+
+- **`1 memory files`.** A row that counts to one now says so.
+
 ## 0.2.0
 
 ### Added

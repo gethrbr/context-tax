@@ -19,7 +19,7 @@ import type { Ledger } from '../ledger/types.js';
 import type { MeasureResult } from '../measure/types.js';
 import type { ResolvedConfig } from '../resolve/types.js';
 import { palette } from '../render/color.js';
-import { hangingText, screenWidth, shortPath, wrapClamped, wrapText } from '../render/layout.js';
+import { hangingText, screenWidth, shortPath, shortenHome, wrapClamped, wrapInstruction, wrapText } from '../render/layout.js';
 import { renderLedger } from '../render/ledger.js';
 import { renderMeasure } from '../render/measure.js';
 import { renderTable, tableWidth } from '../render/table.js';
@@ -195,6 +195,19 @@ describe('every screen fits the window it was given', () => {
     expect(widths.size).toBe(1);
   });
 
+  it('🚨 prints every character of the path a finding tells you to edit', () => {
+    // End to end, because the loss happened in the renderer and the fixture is the only place the
+    // finding's own words are pinned. A path is not advice unless all of it arrives.
+    const path = '/private/tmp/claude-501/a-session-scratch-directory/repos/sentry-mcp/.claude/settings.local.json';
+    const fixture = ledgerFixture();
+    fixture.findings[0].fix = `repair it, or if you no longer want it: add "sentry" to disabledMcpjsonServers in ${path}`;
+    for (const width of WIDTHS) {
+      const screen = renderLedger(fixture, plain, width);
+      expect(screen.replace(/\s+/g, '')).toContain(path);
+      expect(screen.split('\n').filter((line) => line.length > width)).toEqual([]);
+    }
+  });
+
   it('says the whole of a long error somewhere, even though no cell holds it', () => {
     const screen = renderLedger(ledgerFixture(), plain, 80);
     expect(screen).toContain('unsupported_protocol_version');
@@ -264,6 +277,34 @@ describe('wrapping', () => {
     const long = shortPath(`/home/me/${'x'.repeat(80)}/settings.json`, 30, '/home/me');
     expect(long.length).toBeLessThanOrEqual(30);
     expect(long.endsWith('settings.json')).toBe(true);
+  });
+
+  it('🚨 never elides the path a fix tells you to open', () => {
+    // The clamp did. Three lines of `add "x" to disabledMcpjsonServers in /very/long/path` ended
+    // in an `…`, so the one actionable half of the one actionable line was the half thrown away.
+    const path = '/private/tmp/a-very-long-scratch-directory/with/several/levels/repo/.claude/settings.local.json';
+    const lines = wrapInstruction(`fix: add "sentry" to disabledMcpjsonServers in ${path}`, 40, '/home/me');
+    expect(lines.join('')).not.toContain('…');
+    expect(lines.join('').replace(/\s+/g, '')).toContain(path);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(40);
+  });
+
+  it('starts an over-long path on its own line, so its pieces line up', () => {
+    const path = `/${'x'.repeat(60)}/settings.json`;
+    const lines = wrapInstruction(`fix: edit ${path}`, 40, '/home/me');
+    expect(lines[0]).toBe('fix: edit');
+    expect(lines.slice(1).join('')).toBe(path);
+  });
+
+  it('leaves an instruction whose path already fits exactly as the greedy wrap had it', () => {
+    const text = 'fix: add "figma" to disabledMcpjsonServers in ~/projects/storefront/.claude/settings.local.json';
+    expect(wrapInstruction(text, 73, '/home/me')).toEqual(wrapText(text, 73));
+  });
+
+  it('collapses the home directory, which is width nobody reads', () => {
+    expect(shortenHome('edit /home/me/.claude/settings.json now', '/home/me')).toBe('edit ~/.claude/settings.json now');
+    // A different account whose name merely starts the same way is not this account.
+    expect(shortenHome('/home/meredith/.claude/x', '/home/me')).toBe('/home/meredith/.claude/x');
   });
 
   it('clamps the window: unreadably wide is as bad as unusably narrow', () => {

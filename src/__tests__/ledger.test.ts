@@ -823,6 +823,39 @@ describe('a project with no history of its own', () => {
   });
 });
 
+describe('the rows that count things', () => {
+  it('counts to one in the singular', () => {
+    // `1 memory files` shipped on the front screen of every project with a single CLAUDE.md.
+    const skill = {
+      name: 'one', description: 'd', scope: 'project' as const, path: `${ROOT}/.claude/skills/one/SKILL.md`,
+      plugin: null, listingChars: 40, shadowedBy: null, override: null,
+    };
+    const agent = {
+      name: 'one', description: 'd', scope: 'project' as const, path: `${ROOT}/.claude/agents/one.md`,
+      plugin: null, tools: null, listingChars: 40, shadowedBy: null,
+    };
+    const measure = measureResult([]);
+    const ledger = buildLedger(
+      resolveResult([], { skills: [skill], agents: [agent] }),
+      { ...measure, memory: { items: 1, chars: 400, tokens: 100 } },
+      evidence(twelveSessions, [project()]),
+    );
+    const labels = ledger.rows.map((row) => row.label);
+    expect(labels).toContain('1 skill');
+    expect(labels).toContain('1 agent');
+    expect(labels).toContain('1 memory file');
+  });
+
+  it('still says the plural for everything else', () => {
+    const ledger = buildLedger(
+      resolveResult([]),
+      { ...measureResult([]), memory: { items: 2, chars: 800, tokens: 200 } },
+      evidence(twelveSessions, [project()]),
+    );
+    expect(ledger.rows.map((row) => row.label)).toContain('2 memory files');
+  });
+});
+
 describe('the machine line', () => {
   it('counts subagent turns, which were billed, but not as sessions a human started', () => {
     const ledger = buildLedger(
