@@ -27,6 +27,8 @@ All notable changes to this project are documented here. The format follows
   `$HOME` is collapsed to `~` so the usual one fits on a single line, and a path too long even for
   that starts on its own line instead of trailing off the end of a sentence.
 
+- **`1 memory files`.** A row that counts to one now says so.
+
 ## 0.2.0
 
 ### Added

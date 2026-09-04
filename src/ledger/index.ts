@@ -66,6 +66,15 @@ const DEFAULT_MIN_SESSIONS = 5;
  */
 const RARELY_CALLED = 0.1;
 
+/**
+ * `1 memory files` was on the screen of every run in a directory with one CLAUDE.md.
+ *
+ * It is a small thing that does a large thing: a reader deciding whether to believe an estimate
+ * reads the sentence around it first, and a number the tool cannot count to one is not a number
+ * anybody trusts to 40,000.
+ */
+const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
 /** One slice of the scan, rolled up. Built twice: this tree, and the whole machine. */
 interface Usage {
   calls: Map<string, number>;
@@ -678,7 +687,7 @@ export function buildLedger(
 
   const visibleSkills = config.skills.filter((skill) => skill.shadowedBy === null);
   rows.push({
-    label: `${visibleSkills.length} skills`,
+    label: plural(visibleSkills.length, 'skill'),
     kind: 'skills',
     tokens: measure.skills.tokens,
     // No second half: the frontmatter is resident and the body is not counted anywhere.
@@ -748,7 +757,7 @@ export function buildLedger(
 
   const visibleAgents = config.agents.filter((agent) => agent.shadowedBy === null);
   rows.push({
-    label: `${visibleAgents.length} agents`,
+    label: plural(visibleAgents.length, 'agent'),
     kind: 'agents',
     tokens: measure.agents.tokens,
     // No second half: the frontmatter is resident and the body is not counted anywhere.
@@ -762,7 +771,7 @@ export function buildLedger(
   });
 
   rows.push({
-    label: `${measure.memory.items} memory files`,
+    label: plural(measure.memory.items, 'memory file'),
     kind: 'memory',
     tokens: measure.memory.tokens,
     // No second half: the frontmatter is resident and the body is not counted anywhere.
