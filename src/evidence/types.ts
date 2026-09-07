@@ -97,6 +97,20 @@ export interface Evidence {
   scannedFiles: number;
   /** Lines that would not parse. Counted rather than thrown, and surfaced so a corrupt corpus shows. */
   malformedLines: number;
+  /**
+   * Transcripts that could not be opened at all.
+   *
+   * 🚨 A corrupt line was always data rather than an exception; a corrupt *file* was not, and one
+   * unreadable transcript took the whole run down with a Node stack trace. Both failures are
+   * ordinary on a real machine: a file written by a `sudo` session is root-owned, a live session
+   * can remove a file between the directory listing and the open, and a network home can drop a
+   * read under load.
+   *
+   * They are collected rather than swallowed because every session inside them is missing from
+   * every denominator on the screen, and an understated denominator is what makes a used server
+   * look dead.
+   */
+  unreadable: string[];
   sessions: SessionEvidence[];
   projects: ProjectEvidence[];
 }

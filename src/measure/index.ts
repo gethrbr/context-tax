@@ -231,7 +231,18 @@ export async function measureContext(
         // The server's own words, not ours. "HTTP 400" is not a finding; the body behind it is.
         // `failed` rather than `declined`: we asked and it could not answer, which means your
         // sessions get nothing from it either. That is a verdict, not a gap in our data.
-        return declined(error instanceof Error ? error.message : String(error), 'failed');
+        //
+        // 🚨 And never the fallback table, which `declined` would have reached for. The table
+        // answers *what would this have cost*, and that is the wrong question about a server that
+        // just refused to start: the row came back priced at 1,078 tokens a turn, from a
+        // measurement of somebody else's working copy, while the `cannot start` finding and the
+        // spawn error behind it were both dropped. Whether a broken server was reported at all
+        // depended on whether its package happened to be one of five in a table.
+        return unmeasured(
+          server.name,
+          error instanceof Error ? error.message : String(error),
+          'failed',
+        );
       } finally {
         // In `finally` so a server that times out or throws still clears itself from the label.
         // A spinner that keeps naming a server which gave up ten seconds ago is worse than none.

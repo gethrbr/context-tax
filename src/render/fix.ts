@@ -163,6 +163,16 @@ export function renderApplied(
     }
   }
   out.push('');
-  out.push(`  ${colour.dim('Restore any of them by copying the backup back over the file.')}`);
+  // A first `--fix` usually creates the settings file it writes to, and there is no backup of a
+  // file that did not exist. Telling that reader to copy the backup back is an instruction they
+  // cannot follow, on the one screen in the tool that has just changed their machine.
+  const overwritten = applied.some((file) => file.backup !== null);
+  out.push(
+    `  ${colour.dim(
+      overwritten
+        ? 'Restore any of them by copying the backup back over the file.'
+        : 'Nothing was overwritten: none of these files existed before, so undoing this is deleting them.',
+    )}`,
+  );
   return `${out.join('\n')}\n`;
 }

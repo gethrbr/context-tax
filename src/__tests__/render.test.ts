@@ -34,6 +34,7 @@ function ledgerFixture(): Ledger {
   return {
     cwd: '/Users/somebody/a/deeply/nested/checkout/of/a/repository/with/a/long/name',
     actions: [],
+    judged: true,
     machine: { sessions: 128, turns: 41_808, contextTokens: 8_912_004_331, clears: 172, compacts: 22 },
     reconciliation: {
       total: 55_065,
@@ -205,6 +206,35 @@ describe('every screen fits the window it was given', () => {
       const screen = renderLedger(fixture, plain, width);
       expect(screen.replace(/\s+/g, '')).toContain(path);
       expect(screen.split('\n').filter((line) => line.length > width)).toEqual([]);
+    }
+  });
+
+  it('fits the verdicts a first run in a fresh directory produces', () => {
+    // The screens the width tests cover are the ones a busy machine draws. The run a stranger is
+    // most likely to make first draws different notes, and a note is where a wrap goes wrong.
+    const base = ledgerFixture();
+    const fixture: Ledger = {
+      ...base,
+      judged: false,
+      findings: [],
+      recoverable: 0,
+      rows: [
+        { ...base.rows[0], label: 'srv', calls: null, verdict: { kind: 'too-new', sessions: 0, scope: 'project' } },
+        {
+          ...base.rows[0],
+          label: 'other',
+          calls: null,
+          verdict: {
+            kind: 'never-called-age-unknown',
+            sessions: 0,
+            why: 'it is declared in ~/.claude.json, which is not version controlled',
+            scope: 'project',
+          },
+        },
+      ],
+    };
+    for (const width of WIDTHS) {
+      expect(renderLedger(fixture, plain, width).split('\n').filter((line) => line.length > width)).toEqual([]);
     }
   });
 
@@ -445,6 +475,20 @@ describe('what the screen leads with', () => {
     const screen = renderLedger({ ...base, recoverable: 0, findings: [] }, plain, 80);
     expect(screen).toContain('nothing on this screen is unused');
   });
+
+  /**
+   * \u{1f6a8} Zero findings has two causes and they are opposites.
+   *
+   * Everything here is earning its place, or nothing here could be judged at all. A fresh clone
+   * reaches the second, and the headline used to congratulate the reader for it: an all-clear
+   * assembled out of an absence of evidence, one line above a table that says *too few to judge*.
+   */
+  it('\u{1f6a8} does not call a screen clean when nothing on it was judged', () => {
+    const base = ledgerFixture();
+    const screen = renderLedger({ ...base, recoverable: 0, findings: [], judged: false }, plain, 80);
+    expect(screen).not.toContain('nothing on this screen is unused');
+    expect(screen).toContain('no history here yet');
+  });
 });
 
 describe('the denominator is always named', () => {
@@ -465,11 +509,31 @@ describe('the denominator is always named', () => {
 
   it('stays silent for a project count, which is what every number here has always meant', () => {
     const screen = renderLedger(withVerdict({ kind: 'too-new', sessions: 3, scope: 'project' }), plain, 80);
-    // Asserted on the row's own note. The phrase appears elsewhere on every screen \u2014 the scale
-    // line, and the caveat about claude.ai connectors \u2014 so a whole-screen search proves nothing.
+    // Asserted on the row's own note. The phrase appears elsewhere on every screen — the scale
+    // line, and the caveat about claude.ai connectors — so a whole-screen search proves nothing.
     const note = screen.split('\n').find((row) => row.includes('srv: only 3 sessions'));
     expect(note).toContain('3 sessions since it was configured');
     expect(note).not.toContain('on this machine');
+  });
+
+  /**
+   * The run a stranger is most likely to make first is in a directory they have never used Claude
+   * Code in, and `only 0 sessions since it was configured` is arithmetic where a sentence belongs.
+   */
+  it('says there is no history here rather than counting to zero', () => {
+    const screen = renderLedger(withVerdict({ kind: 'too-new', sessions: 0, scope: 'project' }), plain, 80);
+    expect(screen).toContain('no sessions yet, so there is nothing to go on');
+    expect(screen).not.toContain('only 0 sessions');
+  });
+
+  it('does the same for a server whose age nothing records', () => {
+    const screen = renderLedger(
+      withVerdict({ kind: 'never-called-age-unknown', sessions: 0, why: 'it is not in a git repository', scope: 'project' }),
+      plain,
+      80,
+    );
+    expect(screen).toContain('no sessions on record, and it is not in a git repository');
+    expect(screen).not.toContain('0 calls in 0 sessions');
   });
 });
 

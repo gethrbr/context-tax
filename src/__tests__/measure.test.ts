@@ -470,6 +470,43 @@ describe('measureContext', () => {
     expect(result.servers[0].toolCount).toBe(24);
   });
 
+  /**
+   * 🚨 A server that refused to start came back priced.
+   *
+   * The failure path reached for the fallback table before giving up, so a server whose package is
+   * one of the five in that table was reported at 1,078 tokens a turn — a real measurement of
+   * somebody else's working copy — while the `cannot start` finding and the spawn error behind it
+   * were both dropped. Whether a broken server was reported at all depended on whether its package
+   * happened to be in the table.
+   *
+   * The table answers *what would this have cost*. That is the wrong question about a server that
+   * just told us it cannot run.
+   */
+  it('🚨 does not price a server that failed to start from the bundled table', async () => {
+    // Args that match a table row, and a command that cannot be spawned. Both halves are needed:
+    // the table is matched on the package argument, never on the command.
+    const spec = stdioSpec('ok', {
+      command: 'definitely-not-a-binary-xyz',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+    });
+    const result = await measureContext(resolved([serverRow()], new Map([['fixture', spec]])), { cacheDir });
+
+    expect(result.servers[0].status).toMatchObject({ kind: 'unmeasured', cause: 'failed' });
+    expect(result.servers[0].tokens).toBeNull();
+  });
+
+  it('still falls back to the table when nothing was started at all', async () => {
+    // The other half of the same rule: `--no-spawn` never asked, so an estimate is the honest
+    // answer there and the row says where it came from.
+    const spec = stdioSpec('ok', { args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'] });
+    const result = await measureContext(resolved([serverRow()], new Map([['fixture', spec]])), {
+      cacheDir,
+      spawn: false,
+    });
+
+    expect(result.servers[0].status).toMatchObject({ kind: 'estimated' });
+  });
+
   it('starts two identically configured servers once, not twice', async () => {
     const spec = stdioSpec('crash');
     const launch = new Map([
