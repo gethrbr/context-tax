@@ -352,8 +352,13 @@ one.
 `claude mcp remove <name> -s user` takes a server out of **every** project on the machine, so it is
 never recommended on one project's silence: a server idle in this repo and busy in the one next door
 is not dead, and that command would break work you are still doing. Machine-wide levers are judged
-on machine-wide evidence, project-scoped levers on this project's, and a project with too little
-history to judge anything borrows the machine's rather than printing a row of dashes.
+on machine-wide evidence, and project-scoped levers on this project's.
+
+The rule has a ceiling as well as a floor: a denominator must not count sessions the thing could
+never have been loaded in. A `.mcp.json` server exists in one project, so the machine's history is
+not a wider window on the same question. A directory with too little history of its own therefore
+borrows the machine's for what the machine loads everywhere, and says **no sessions yet, so there is
+nothing to judge it on** for what it does not.
 
 Whenever a count came from more than this directory, the row says **on this machine**. Silence means
 the project, which is what every number here has always meant.

@@ -132,7 +132,13 @@ function recordToolUse(acc: SessionAccumulator, name: string, input: Record<stri
     return;
   }
 
-  if (name === 'Agent') {
+  // ⚠️ Two names for one tool, because a transcript is history. The subagent tool was `Task`
+  // before it was renamed `Agent`, and a machine with a year of sessions has both on disk. Reading
+  // only the current name loses every older invocation, and an agent that looks uninvoked is what
+  // makes its whole plugin look idle — which is the one lever that switches off four things at
+  // once. This machine has 109 `Agent` and no `Task`, which is exactly what a corpus that starts
+  // after the rename looks like, and exactly why it could not have been caught here.
+  if (name === 'Agent' || name === 'Task') {
     const type = input ? asString(input.subagent_type) : null;
     if (type) bump(acc.agents, type);
   }
@@ -329,9 +335,20 @@ export async function scanEvidence(options: ScanOptions = {}): Promise<Evidence>
   const projects = new Map<string, ProjectAccumulator>();
   let malformedLines = 0;
   let scannedFiles = 0;
+  const unreadable: string[] = [];
 
   for (const file of files) {
-    const { acc, malformed } = await scanFile(file.path, file.slug, file.kind);
+    // 🚨 The file-level twin of the malformed-line rule above. A transcript that cannot be opened
+    // is one this machine has and this run did not read, which is a smaller denominator and a
+    // more confident verdict than the evidence supports. Recorded, and surfaced on the screen.
+    let scanned: { acc: SessionAccumulator; malformed: number };
+    try {
+      scanned = await scanFile(file.path, file.slug, file.kind);
+    } catch {
+      unreadable.push(file.path);
+      continue;
+    }
+    const { acc, malformed } = scanned;
     malformedLines += malformed;
     scannedFiles += 1;
 
@@ -395,5 +412,5 @@ export async function scanEvidence(options: ScanOptions = {}): Promise<Evidence>
     }))
     .sort((a, b) => b.turns - a.turns);
 
-  return { scannedFiles, malformedLines, sessions, projects: projectEvidence };
+  return { scannedFiles, malformedLines, unreadable, sessions, projects: projectEvidence };
 }

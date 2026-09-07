@@ -55,7 +55,7 @@ function project(overrides: Partial<ProjectEvidence> = {}): ProjectEvidence {
 }
 
 function evidence(sessions: SessionEvidence[], projects: ProjectEvidence[]): Evidence {
-  return { scannedFiles: sessions.length, malformedLines: 0, sessions, projects };
+  return { scannedFiles: sessions.length, malformedLines: 0, unreadable: [], sessions, projects };
 }
 
 function server(overrides: Partial<ResolvedMcpServer> = {}): ResolvedMcpServer {
@@ -790,12 +790,24 @@ describe('a project with no history of its own', () => {
     }),
   );
 
-  it('🚨 borrows the machine denominator instead of printing a row of dashes', () => {
+  const machineWide = server({
+    scope: 'user',
+    path: '/home/u/.claude.json',
+    fixLever: {
+      kind: 'claude-mcp-remove',
+      command: 'claude mcp remove srv -s user',
+      scope: 'user',
+      path: '/home/u/.claude.json',
+    },
+  });
+
+  it('\u{1f6a8} borrows the machine denominator for a server that was loaded in all of it', () => {
     // The most likely first run there is: a fresh clone, or any directory the reader has not used
     // Claude Code in. Every column that carries the argument \u2014 calls, per call \u2014 used to come out
-    // empty while the history to fill them sat on the same disk.
+    // empty while the history to fill them sat on the same disk. A `-s user` server was in context
+    // for every one of those sessions, so a wider count is a wider window on the same question.
     const ledger = buildLedger(
-      resolveResult([server()]),
+      resolveResult([machineWide]),
       measureResult([measured()]),
       evidence(elsewhere, [
         project({ cwd: '/other', mcpServers: { srv: { calls: 4, sessions: 2, tools: { one: 4 } } } }),
@@ -806,6 +818,130 @@ describe('a project with no history of its own', () => {
     expect(row?.calls).toBe(4);
     expect(row?.perCall).not.toBeNull();
     expect(row?.verdict).toMatchObject({ scope: 'machine' });
+    expect(ledger.judged).toBe(true);
+  });
+
+  /**
+   * \u{1f6a8} The ceiling on the same rule, and the bug this exists to stop.
+   *
+   * Reproduced against the published `0.2.1`: a `.mcp.json` committed a year ago, in a directory
+   * that had never run Claude Code, was reported as `0 calls in 746 sessions on this machine since
+   * it was configured`. It was in context for none of those sessions. The window was real, and it
+   * was a window on something else.
+   */
+  it('\u{1f6a8} will not borrow it for a server that exists only in this project', () => {
+    const ledger = buildLedger(
+      resolveResult([server()]),
+      measureResult([measured()]),
+      evidence(elsewhere, [
+        project({ cwd: '/other', mcpServers: { srv: { calls: 4, sessions: 2, tools: { one: 4 } } } }),
+      ]),
+    );
+
+    const row = ledger.rows.find((entry) => entry.label === 'srv');
+    // Not 4: those calls were made where this `.mcp.json` is not loaded, by whatever `srv` names
+    // over there. And not 0 either, which would be a measurement where there is no history to
+    // measure. The column takes a dash, as `share` and `per call` already do.
+    expect(row?.calls).toBeNull();
+    expect(row?.verdict).toMatchObject({ kind: 'too-new', scope: 'project', sessions: 0 });
+    expect(ledger.findings).toEqual([]);
+  });
+
+  it('\u{1f6a8} makes no never-called claim about a project server in a fresh clone', () => {
+    // The age guard alone does not save this one: the `.mcp.json` was committed upstream years
+    // before the clone existed, so `configuredSince` is genuinely old. Only reach saves it.
+    const ledger = buildLedger(
+      resolveResult([
+        server({ configuredSince: { known: true, iso: '2024-01-01T00:00:00.000Z', commit: 'old', via: 'git' } }),
+      ]),
+      measureResult([measured()]),
+      evidence(elsewhere, [project({ cwd: '/other' })]),
+    );
+
+    expect(ledger.findings).toEqual([]);
+    expect(ledger.rows.find((entry) => entry.label === 'srv')?.verdict.kind).toBe('too-new');
+    // And the screen must not read as an all-clear on the strength of it. Zero findings because
+    // nothing could be judged is the opposite of zero findings because everything is used.
+    expect(ledger.judged).toBe(false);
+  });
+
+  it('borrows it for a plugin the machine enabled, and not for one this repo enabled', () => {
+    // A plugin switched on in `~/.claude/settings.json` is in context in every session on the
+    // machine, so the wider denominator is honest. The same plugin switched on by this repo's own
+    // settings file is in context nowhere else, and its silence elsewhere means nothing.
+    const pluginServer = server({
+      scope: 'plugin',
+      plugin: 'pack@market',
+      fixLever: {
+        kind: 'enabledPlugins',
+        plugin: 'pack@market',
+        settingsPath: `${ROOT}/.claude/settings.local.json`,
+      },
+    });
+    const config = (path: string, kind: 'user' | 'project-shared'): Partial<ResolvedConfig> => ({
+      sources: [{ kind, path, present: true, keys: [] }],
+      plugins: [
+        { id: 'pack@market', enabled: true, enabledBy: path, installPath: null, scope: null, installedAt: null },
+      ],
+    });
+    const history = evidence(elsewhere, [
+      project({ cwd: '/other', mcpServers: { srv: { calls: 4, sessions: 2, tools: { one: 4 } } } }),
+    ]);
+    const scopeOf = (settings: Partial<ResolvedConfig>): unknown =>
+      buildLedger(resolveResult([pluginServer], settings), measureResult([measured()]), history).rows.find(
+        (entry) => entry.label === 'srv',
+      )?.verdict;
+
+    expect(scopeOf(config('/home/u/.claude/settings.json', 'user'))).toMatchObject({ scope: 'machine' });
+    expect(scopeOf(config(`${ROOT}/.claude/settings.json`, 'project-shared'))).toMatchObject({ scope: 'project' });
+  });
+
+  const localSkill = (scope: 'user' | 'project') => ({
+    name: 'dead',
+    description: 'd',
+    scope,
+    path: '/x',
+    plugin: null,
+    listingChars: 400,
+    shadowedBy: null,
+    override: null,
+  });
+
+  it('judges a skill the whole machine loads over the whole machine', () => {
+    // `~/.claude/skills` is in context in every session on the machine, so the borrowed window is
+    // a window on the same question, and the finding is allowed to stand on it.
+    const ledger = buildLedger(
+      resolveResult([], { skills: [localSkill('user')] }),
+      measureResult([]),
+      evidence(elsewhere, [project({ cwd: '/other' })]),
+    );
+
+    expect(ledger.findings[0].headline).toContain('never invoked');
+    expect(ledger.findings[0].detail).toContain('12 sessions on this machine');
+  });
+
+  it('counts the calls it borrows, not only the sessions', () => {
+    // The half that keeps widening honest in the other direction: a skill used in the sibling repo
+    // is used, and a borrowed denominator that did not borrow the numerator would call it dead.
+    const ledger = buildLedger(
+      resolveResult([], { skills: [localSkill('user')] }),
+      measureResult([]),
+      evidence(elsewhere, [project({ cwd: '/other', skills: { dead: { model: 3, user: 0 } } })]),
+    );
+
+    expect(ledger.findings).toEqual([]);
+  });
+
+  it('🚨 says nothing about a skill that only exists in this project', () => {
+    // `.claude/skills` here is in context nowhere else, so the machine's 12 sessions are not
+    // evidence about it, and this directory has none of its own.
+    const ledger = buildLedger(
+      resolveResult([], { skills: [localSkill('project')] }),
+      measureResult([]),
+      evidence(elsewhere, [project({ cwd: '/other' })]),
+    );
+
+    expect(ledger.findings).toEqual([]);
   });
 
   it('🚨 does not borrow a total, because a cold start from another config is not this prefix', () => {
@@ -877,5 +1013,49 @@ describe('the machine line', () => {
       clears: 7,
       compacts: 3,
     });
+  });
+});
+
+/**
+ * The floor the servers have had since `0.2.0`, which skills never got.
+ *
+ * `19 skills never invoked` on a machine two sessions old is not a finding, it is a description of
+ * a machine two sessions old, and it arrives with a `--fix` that writes settings.
+ */
+describe('a machine too new to judge anything', () => {
+  const newSkill = {
+    name: 'dead',
+    description: 'd',
+    scope: 'user' as const,
+    path: '/x',
+    plugin: null,
+    listingChars: 400,
+    shadowedBy: null,
+    override: null,
+  };
+  const sessionsHere = (count: number): SessionEvidence[] =>
+    Array.from({ length: count }, (_, index) =>
+      session({ sessionId: `n${index}`, firstSeen: `2026-08-0${index + 1}T00:00:00.000Z` }),
+    );
+
+  it('🚨 will not call a skill unused on two sessions of evidence', () => {
+    const ledger = buildLedger(
+      resolveResult([], { skills: [newSkill] }),
+      measureResult([]),
+      evidence(sessionsHere(2), [project({ sessions: 2 })]),
+    );
+
+    expect(ledger.findings).toEqual([]);
+  });
+
+  it('still says so once there is enough history to say it', () => {
+    const ledger = buildLedger(
+      resolveResult([], { skills: [newSkill] }),
+      measureResult([]),
+      evidence(sessionsHere(5), [project({ sessions: 5 })]),
+    );
+
+    expect(ledger.findings[0].headline).toContain('never invoked');
+    expect(ledger.findings[0].detail).toContain('5 sessions here');
   });
 });

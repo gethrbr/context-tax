@@ -29,6 +29,7 @@ export function readmeLedger(): Ledger {
   return {
     cwd: '~/projects/storefront',
     actions: [],
+    judged: true,
     machine: {
       sessions: SESSIONS,
       turns: TURNS,

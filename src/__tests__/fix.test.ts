@@ -19,6 +19,8 @@ import { describe, expect, it } from 'vitest';
 import { unifiedDiff } from '../fix/diff.js';
 import { applyFixes, backupRoot, planFixes } from '../fix/index.js';
 import { detectIndent, editSettings, FixError } from '../fix/json.js';
+import { palette } from '../render/color.js';
+import { renderApplied } from '../render/fix.js';
 import type { FixAction, SettingsAction } from '../fix/types.js';
 
 function action(overrides: Partial<SettingsAction> = {}): SettingsAction {
@@ -228,5 +230,27 @@ describe('writing', () => {
     await writeFile(settings, '{}\n');
     await planFixes([action({ settingsPath: settings })]);
     expect(await readFile(settings, 'utf8')).toBe('{}\n');
+  });
+});
+
+/**
+ * The last screen a `--fix` prints is the one that has to be true, because it is the only
+ * instruction the reader has after the tool has changed their machine.
+ */
+describe('what it says once it has written', () => {
+  const plain = palette(false);
+
+  it('tells you how to undo an overwrite', () => {
+    const screen = renderApplied([{ path: '/x/settings.json', backup: '/b/settings.json', created: false }], plain, 80);
+    expect(screen).toContain('copying the backup back');
+  });
+
+  it('🚨 does not point at a backup of a file that did not exist', () => {
+    // A first `--fix` usually creates the settings file it writes to, and nothing was backed up
+    // because there was nothing to back up. "Copy the backup back" is then an instruction that
+    // cannot be followed, printed at the moment the reader most needs it to be true.
+    const screen = renderApplied([{ path: '/x/settings.json', backup: null, created: true }], plain, 80);
+    expect(screen).not.toContain('copying the backup back');
+    expect(screen).toContain('undoing this is deleting them');
   });
 });

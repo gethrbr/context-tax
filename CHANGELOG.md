@@ -4,6 +4,88 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Nine defects, found by auditing the published `0.2.1` against configurations nobody here designed:
+a directory with no history, a machine two sessions old, a transcript that cannot be opened, a
+server that cannot start, and twelve servers at once with four of them pathological. Every one of
+them is the same shape, which is why they are one release: **the tool said something it could not
+defend, in a place where saying nothing was available.**
+
+### Fixed
+
+- 🚨 **A verdict no longer counts sessions the thing could never have been loaded in.** `0.2.0`
+  established that a denominator must cover everything its fix would switch off. It had no ceiling,
+  so a project with too little history of its own borrowed the machine's for *everything*,
+  including servers that exist in one directory. Measured against the published `0.2.1`, in a
+  directory that had never run Claude Code, against a `.mcp.json` committed a year earlier:
+
+  ```
+  everything costs 740 tokens every turn and has never been called
+  0 calls in 746 sessions on this machine since it was configured.
+  ```
+
+  It was in context for none of those 746 sessions, and the fix offered would have switched off a
+  server that never had a chance to be called. The window was real and it was a window on something
+  else. Widening is now earned by **reach** rather than by need: a `-s user` server and a plugin
+  the machine enabled are loaded in every session, so their silence everywhere is evidence, while a
+  `.mcp.json` server, a `~/.claude.json` entry filed under one project, and a plugin this repo
+  enabled are judged here or not at all. The same rule now applies per skill. Where nothing can be
+  judged the row says *no sessions yet, so there is nothing to go on*, which is what the tool
+  actually knows. See `ledger/reach.ts`.
+
+- 🚨 **A server that failed to start is no longer priced from the bundled table.** The failure path
+  reached for the fallback table before giving up, so a server whose package was one of the five in
+  that table came back at 1,078 tokens a turn from a measurement of somebody else's working copy,
+  while the `cannot start` finding and the spawn error behind it were both dropped. Whether a
+  broken server was reported at all depended on whether its package happened to be in a table. The
+  table answers *what would this have cost*, which is the wrong question about a server that just
+  refused to run. `--no-spawn`, which never asked, still uses it.
+
+- 🚨 **One unreadable transcript no longer takes the whole run down.** A corrupt line was always
+  data rather than an exception; a corrupt file was not, and a single `EACCES` ended the run with a
+  Node stack trace and exit 1. Every way it happens is ordinary: a session file written under
+  `sudo` is root-owned, a live session can remove a file between the listing and the open, and a
+  network home can drop a read. The scan now finishes and names what it could not read, because
+  every session inside those files is missing from every denominator on the screen.
+
+- 🚨 **`N skills never invoked` now needs the same five sessions a server has always needed.** On a
+  machine two sessions old it was reachable, and it is not a finding there, it is a description of
+  a machine two sessions old. It arrived with a `--fix` that writes settings.
+
+- 🚨 **A screen where nothing could be judged no longer reads as an all-clear.** Zero findings has
+  two causes and they are opposites: everything here is earning its place, or nothing here could be
+  judged at all. The headline said *nothing on this screen is unused* for both, one line above a
+  table saying *too few to judge*.
+
+- **An agent invoked under the tool's older name is counted.** The subagent tool was `Task` before
+  it was renamed `Agent`, and a transcript is history: a machine with a year of sessions has both
+  on disk. Only the current name was read, and an agent that looks uninvoked is what makes its
+  whole plugin look idle, which is the one lever that switches off a plugin's servers, skills,
+  agents and commands together. This machine has 109 `Agent` and zero `Task`, which is what a
+  corpus that begins after the rename looks like, and why no run here could have caught it.
+
+- **The calls column takes a dash where there is no history to count.** `0` is a measurement, and
+  beside a note reading *no sessions yet* it was a measurement of nothing. `share` and `per call`
+  already went to a dash for the same reason.
+
+- **Two verdicts stop counting to zero out loud.** *only 0 sessions since it was configured* and
+  *0 calls in 0 sessions on record* are arithmetic where a sentence belongs, and the reader most
+  likely to see either is standing in a directory they have never used Claude Code in. Neither
+  carries a pronoun, because identical notes are merged and one sentence has to read as well for
+  eight servers as for one.
+
+- **`--fix` no longer points at a backup of a file that did not exist.** A first fix usually
+  creates the settings file it writes to, and nothing was backed up because there was nothing to
+  back up. *Restore any of them by copying the backup back over the file* was then an instruction
+  that could not be followed, printed at the one moment the reader most needs it to be true.
+
+### Changed
+
+- `Ledger` gains `judged` and `Evidence` gains `unreadable`, both required. Consumers of the
+  library surface that construct either type by hand will need the new fields, which is why this is
+  a minor rather than a patch.
+
 ## 0.2.1
 
 ### Fixed

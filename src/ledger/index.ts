@@ -27,6 +27,7 @@ import type {
   ResolvedSkill,
   SkillOverride,
 } from '../resolve/types.js';
+import { serverReach, skillReach } from './reach.js';
 import type {
   EvidenceScope,
   Finding,
@@ -433,30 +434,62 @@ export function buildLedger(
    */
   const thin = sessions.length < minSessions && allSessions.length >= minSessions;
 
+  const usageIn = (scope: EvidenceScope): Usage => (scope === 'machine' ? everywhere : here);
+  const sessionsIn = (scope: EvidenceScope): number =>
+    scope === 'machine' ? allSessions.length : sessions.length;
+
   /**
-   * 🔑 The rule the whole change turns on: **a verdict's denominator must cover everything its fix
-   * would switch off.**
+   * 🔑 The two rules every denominator on this screen has to satisfy at once.
    *
-   * `claude mcp remove <name> -s user` is machine-wide, so recommending it on this project's
-   * silence is a recommendation to break the project next door. Found on a real machine: a server
-   * with one call in 152 sessions here, 67 in a sibling repo, and a `-s user` removal printed
-   * against it.
+   * **The floor: it must cover everything its fix would switch off.** `claude mcp remove <name>
+   * -s user` is machine-wide, so recommending it on this project's silence is a recommendation to
+   * break the project next door. Found on a real machine: a server with one call in 152 sessions
+   * here, 67 in a sibling repo, and a `-s user` removal printed against it.
+   *
+   * **The ceiling: it must not cover sessions the thing could never have been loaded in.** A
+   * `.mcp.json` server exists in one project, so the machine's history is not a wider window on
+   * the same question. Widening is therefore earned by reach and never by need: a project that
+   * cannot judge a project-scoped server says so, and says nothing else. See `reach.ts`.
    */
   const serverScope = (server: ResolvedMcpServer): EvidenceScope =>
     server.fixLever.kind === 'claude-mcp-remove' && server.fixLever.scope === 'user'
       ? 'machine'
-      : thin
+      : thin && serverReach(server, config.plugins, config.sources) === 'machine'
         ? 'machine'
         : 'project';
 
-  /** Skills, agents and plugins have no machine-wide lever, so they widen only when starved. */
-  const fileScope: EvidenceScope = thin ? 'machine' : 'project';
-  const fileUsage = fileScope === 'machine' ? everywhere : here;
-  const fileSessions = fileScope === 'machine' ? allSessions.length : sessions.length;
-  const { skillModelCalls, skillTypedCalls } = fileUsage;
-  /** Never a bare session count. The reader has to be able to see which history it was counted over. */
-  const overSessions = (count: number): string =>
-    `${count} session${count === 1 ? '' : 's'} ${fileScope === 'machine' ? 'on this machine' : 'here'}`;
+  /** Skills have no machine-wide lever, so they widen only when starved — and only if they reach. */
+  const skillScope = (skill: ResolvedSkill): EvidenceScope =>
+    thin && skillReach(skill, config.plugins, config.sources) === 'machine' ? 'machine' : 'project';
+
+  const skillCalls = (skill: ResolvedSkill): { model: number; typed: number } => {
+    const usage = usageIn(skillScope(skill));
+    return {
+      model: callsFor(usage.skillModelCalls, skill.name, skill.plugin),
+      typed: callsFor(usage.skillTypedCalls, skill.name, skill.plugin),
+    };
+  };
+
+  /**
+   * 🚨 The same floor the servers have had since `0.2.0`, which skills never got.
+   *
+   * `N skills never invoked` was reachable on a machine two sessions old, where it is not a
+   * finding but a description of a machine two sessions old. Silence is only evidence once there
+   * is enough of it, and the count that has to clear the bar is the one this skill is judged over.
+   */
+  const skillJudgeable = (skill: ResolvedSkill): boolean =>
+    sessionsIn(skillScope(skill)) >= minSessions;
+
+  /**
+   * Never a bare session count. The reader has to be able to see which history it was counted over.
+   *
+   * The skills in any one finding always share a scope, so one sentence can carry it. They cannot
+   * differ: a machine-scoped skill needs `thin`, a judgeable project-scoped one needs the opposite,
+   * and `skillJudgeable` has already dropped everything below the floor.
+   */
+  const overSessions = (scope: EvidenceScope): string =>
+    `${sessionsIn(scope)} session${sessionsIn(scope) === 1 ? '' : 's'} ` +
+    `${scope === 'machine' ? 'on this machine' : 'here'}`;
 
   /**
    * Has nothing this plugin provides ever been used?
@@ -528,7 +561,14 @@ export function buildLedger(
       tokens: perTurn,
       loadedTokens: measured.tokens,
       share: share(perTurn),
-      calls: used,
+      /**
+       * 🔑 A dash, not a zero, when there is no history in scope at all.
+       *
+       * `0` in the calls column is a measurement, and next to a note reading *no sessions yet* it
+       * is a measurement of nothing. The two glyphs say different things and the reader acts on
+       * the difference: `share` and `per call` already go to a dash here for the same reason.
+       */
+      calls: scoped.length === 0 ? null : used,
       perCall,
       basis: basisFor(measured),
       verdict,
@@ -693,10 +733,7 @@ export function buildLedger(
     // No second half: the frontmatter is resident and the body is not counted anywhere.
     loadedTokens: null,
     share: share(measure.skills.tokens),
-    calls: visibleSkills.reduce(
-      (sum, skill) => sum + callsFor(skillModelCalls, skill.name, skill.plugin),
-      0,
-    ),
+    calls: visibleSkills.reduce((sum, skill) => sum + skillCalls(skill).model, 0),
     perCall: null,
     basis: null,
     verdict: {
@@ -706,10 +743,10 @@ export function buildLedger(
     fix: null,
   });
 
-  const typedOnly = visibleSkills.filter(
-    (skill) =>
-      callsFor(skillModelCalls, skill.name, skill.plugin) === 0 &&
-      callsFor(skillTypedCalls, skill.name, skill.plugin) > 0,
+  const judgeableSkills = visibleSkills.filter(skillJudgeable);
+
+  const typedOnly = judgeableSkills.filter(
+    (skill) => skillCalls(skill).model === 0 && skillCalls(skill).typed > 0,
   );
   if (typedOnly.length > 0) {
     findings.push({
@@ -732,15 +769,14 @@ export function buildLedger(
     });
   }
 
-  const neverUsedSkills = visibleSkills.filter(
-    (skill) =>
-      callsFor(skillModelCalls, skill.name, skill.plugin) === 0 &&
-      callsFor(skillTypedCalls, skill.name, skill.plugin) === 0,
+  const neverUsedSkills = judgeableSkills.filter(
+    (skill) => skillCalls(skill).model === 0 && skillCalls(skill).typed === 0,
   );
   if (neverUsedSkills.length > 0) {
+    const window = overSessions(skillScope(neverUsedSkills[0]));
     findings.push({
       headline: `${neverUsedSkills.length} skill${neverUsedSkills.length === 1 ? '' : 's'} never invoked, either way`,
-      detail: `${skillLabels(neverUsedSkills).join(', ')}. Across ${overSessions(fileSessions)}.`,
+      detail: `${skillLabels(neverUsedSkills).join(', ')}. Across ${window}.`,
       saves: toTokens(neverUsedSkills.reduce((sum, skill) => sum + skill.listingChars, 0)),
       fix: 'set each to off in skillOverrides, or delete the ones you do not recognise',
       actions: neverUsedSkills
@@ -748,7 +784,7 @@ export function buildLedger(
           skillAction(
             skill,
             'off',
-            `${skill.name} has not been invoked in ${overSessions(fileSessions)}, by you or by the model.`,
+            `${skill.name} has not been invoked in ${overSessions(skillScope(skill))}, by you or by the model.`,
           ),
         )
         .filter((action): action is FixAction => action !== null),
@@ -805,7 +841,29 @@ export function buildLedger(
     rows,
     findings,
     recoverable: findings.reduce((sum, finding) => sum + (finding.saves ?? 0), 0),
-    problems: [...config.problems],
+    // A verdict about use, not a verdict about why there is no verdict. `too-new`,
+    // `never-called-age-unknown`, `broken` and `not-measured` are all the tool declining to say.
+    judged:
+      rows.some((row) =>
+        ['earning-it', 'rarely-called', 'never-called'].includes(row.verdict.kind),
+      ) || judgeableSkills.length > 0,
+    problems: [
+      ...config.problems,
+      // 🚨 Said on the main screen, not only in the developer view: every session inside a file
+      // that could not be read is missing from every denominator above it, and a denominator that
+      // is quietly too small is how a used server gets called dead.
+      ...(evidence.unreadable.length === 0
+        ? []
+        : [
+            {
+              path: evidence.unreadable[0],
+              message:
+                `${plural(evidence.unreadable.length, 'session file')} could not be read, so the ` +
+                'sessions inside are missing from every count above' +
+                (evidence.unreadable.length === 1 ? '' : ' (first of them)'),
+            },
+          ]),
+    ],
   };
 }
 

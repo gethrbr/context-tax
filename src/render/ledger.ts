@@ -112,13 +112,24 @@ function verdictLine(verdict: Verdict): { text: string; loud: boolean } | null {
     case 'never-called-age-unknown':
       return {
         text:
-          `0 calls in ${n(verdict.sessions)} sessions${where(verdict.scope)} on record, but ${verdict.why}, ` +
-          'so this is not evidence that it is old',
+          verdict.sessions === 0
+            ? `no sessions${where(verdict.scope)} on record, and ${verdict.why}`
+            : `0 calls in ${n(verdict.sessions)} sessions${where(verdict.scope)} on record, but ${verdict.why}, ` +
+              'so this is not evidence that it is old',
         loud: false,
       };
     case 'too-new':
+      // 🔑 `only 0 sessions since it was configured` is arithmetic where a sentence belongs. The
+      // reader most likely to see it is standing in a directory they have never run Claude Code
+      // in, and what they need told is that there is nothing here yet, not that nothing is 0.
+      //
+      // No pronoun in it, on purpose: identical notes are merged, so one sentence can be printed
+      // against `ok0, ok1, ok2` and has to read as well for eight servers as for one.
       return {
-        text: `only ${n(verdict.sessions)} session${verdict.sessions === 1 ? '' : 's'}${where(verdict.scope)} since it was configured, too few to judge`,
+        text:
+          verdict.sessions === 0
+            ? `no sessions${where(verdict.scope)} yet, so there is nothing to go on`
+            : `only ${n(verdict.sessions)} session${verdict.sessions === 1 ? '' : 's'}${where(verdict.scope)} since it was configured, too few to judge`,
         loud: false,
       };
     case 'broken':
@@ -223,7 +234,14 @@ function headline(ledger: Ledger): string {
     total === null
       ? `${n(attributed)} tokens of context measured here`
       : `${n(total)} tokens on every turn`;
-  if (ledger.recoverable <= 0) return `${lead}, and nothing on this screen is unused.`;
+  if (ledger.recoverable <= 0) {
+    // 🚨 Two different empty results, and only one of them is good news. Nothing was judged in a
+    // directory with no history of its own, and telling that reader everything is earning its
+    // place is a claim made out of an absence of evidence.
+    return ledger.judged
+      ? `${lead}, and nothing on this screen is unused.`
+      : `${lead}, and no history here yet to say whether any of it is used.`;
+  }
   const count = ledger.findings.length;
   return `${lead}, ${n(ledger.recoverable)} of them recoverable from ${count} finding${count === 1 ? '' : 's'} below.`;
 }

@@ -15,7 +15,7 @@
  * 4. A session with no recorded `cwd` **joins no project**, rather than joining the wrong one.
  */
 
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -74,6 +74,23 @@ async function scanFixture(files: Record<string, string[]>) {
     await mkdir(join(root, name), { recursive: true });
     await writeFile(join(root, name, 'session.jsonl'), `${lines.join('\n')}\n`);
   }
+  return scanEvidence({ projectsDir: root });
+}
+
+/**
+ * A transcript the scan can see and cannot open.
+ *
+ * A dangling symlink rather than a `chmod 000`, because the test has to hold for the reader
+ * running it as root, where nothing is unreadable and the case would silently stop being tested.
+ */
+async function unreadableFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'context-tax-'));
+  await mkdir(join(root, '-repo'), { recursive: true });
+  await writeFile(
+    join(root, '-repo', 'good.jsonl'),
+    `${assistant([], { cacheCreation: 10 })}\n`,
+  );
+  await symlink(join(root, 'nothing-here'), join(root, '-repo', 'gone.jsonl'));
   return scanEvidence({ projectsDir: root });
 }
 
@@ -222,6 +239,27 @@ describe('scanEvidence', () => {
     expect(evidence.projects[0].agents).toEqual({ Explore: 1 });
   });
 
+  /**
+   * \u{1f6a8} A transcript is history, and history has both names in it.
+   *
+   * The subagent tool was `Task` before it was renamed `Agent`. Reading only the current name
+   * silently drops every older invocation, and an agent that looks uninvoked is what makes its
+   * whole plugin look idle: `enabledPlugins: false` is the one lever that switches off a plugin's
+   * servers, skills, agents and commands together. This machine has 109 `Agent` and zero `Task`,
+   * which is what a corpus that begins after the rename looks like, and why no run here could have
+   * caught it.
+   */
+  it('\u{1f6a8} records one under the name the tool used to have', async () => {
+    const evidence = await scanFixture({
+      a: [
+        assistant([toolUse('Task', { subagent_type: 'Explore' })], { cacheCreation: 10 }),
+        assistant([toolUse('Agent', { subagent_type: 'Explore' })], { cacheRead: 10 }),
+      ],
+    });
+
+    expect(evidence.projects[0].agents).toEqual({ Explore: 2 });
+  });
+
   it('joins a session with no recorded cwd to NO project rather than to the wrong one', async () => {
     const noCwd = JSON.stringify({
       type: 'assistant',
@@ -268,5 +306,29 @@ describe('scanEvidence', () => {
     const evidence = await scanEvidence({ projectsDir: join(tmpdir(), 'context-tax-absent-xyz') });
 
     expect(evidence).toMatchObject({ scannedFiles: 0, malformedLines: 0, projects: [] });
+  });
+});
+
+/**
+ * 🚨 The file-level twin of the malformed-line rule, and it was not held.
+ *
+ * One unreadable transcript took the whole run down with a Node stack trace and exit 1. Every way
+ * it happens is ordinary: a session file written under `sudo` is root-owned, a live session can
+ * remove a file between the listing and the open, and a network home can drop a read. The tool
+ * reads the whole machine, so it only takes one.
+ */
+describe('a transcript that cannot be opened', () => {
+  it('🚨 finishes the scan instead of crashing the run', async () => {
+    const evidence = await unreadableFixture();
+
+    expect(evidence.scannedFiles).toBe(1);
+    expect(evidence.sessions).toHaveLength(1);
+  });
+
+  it('names it, because the sessions inside it are missing from every denominator', async () => {
+    const evidence = await unreadableFixture();
+
+    expect(evidence.unreadable).toHaveLength(1);
+    expect(evidence.unreadable[0]).toContain('gone.jsonl');
   });
 });

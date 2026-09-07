@@ -191,5 +191,14 @@ export interface Ledger {
   findings: Finding[];
   /** Tokens per turn that the findings would recover between them. */
   recoverable: number;
+  /**
+   * Was anything on this screen actually judged for use?
+   *
+   * 🚨 Zero findings has two causes and they are opposites: everything here is earning its place,
+   * or nothing here could be judged at all. A fresh clone reaches the second and used to print the
+   * first, which is the same false confidence the reach rule exists to stop, one line higher up
+   * the screen.
+   */
+  judged: boolean;
   problems: { path: string; message: string }[];
 }
