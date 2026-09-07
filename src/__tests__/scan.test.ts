@@ -245,9 +245,9 @@ describe('scanEvidence', () => {
    * The subagent tool was `Task` before it was renamed `Agent`. Reading only the current name
    * silently drops every older invocation, and an agent that looks uninvoked is what makes its
    * whole plugin look idle: `enabledPlugins: false` is the one lever that switches off a plugin's
-   * servers, skills, agents and commands together. This machine has 109 `Agent` and zero `Task`,
-   * which is what a corpus that begins after the rename looks like, and why no run here could have
-   * caught it.
+   * servers, skills, agents and commands together. A corpus that begins after the rename holds
+   * nothing but `Agent`, which is why a machine with only recent history cannot surface this and an
+   * older one is full of it.
    */
   it('\u{1f6a8} records one under the name the tool used to have', async () => {
     const evidence = await scanFixture({

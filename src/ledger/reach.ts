@@ -11,15 +11,17 @@
  *
  * Without this, the most likely first run of the tool was also its worst. Measured against the
  * published `0.2.1` on 2026-09-07, in a directory that had never run Claude Code, against a
- * `.mcp.json` committed a year earlier:
+ * `.mcp.json` committed a year earlier, with a fabricated corpus whose every session belongs to
+ * another directory:
  *
  * ```
  * everything costs 740 tokens every turn and has never been called
- * 0 calls in 746 sessions on this machine since it was configured.
+ * 0 calls in 12 sessions on this machine since it was configured.
  * ```
  *
- * It was in context for none of those 746 sessions. The window under the verdict was real, and it
- * was a window on something else.
+ * It was in context for none of those 12 sessions, and the same run against a real corpus put
+ * hundreds in that sentence. The window under the verdict was real, and it was a window on
+ * something else.
  *
  * ⚠️ The default when provenance cannot be established is `'project'`, and the asymmetry is
  * deliberate rather than tidy: widening makes a claim, while refusing to widen makes none, because
