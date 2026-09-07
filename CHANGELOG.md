@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.3.0
 
 Nine defects, found by auditing the published `0.2.1` against configurations nobody here designed:
 a directory with no history, a machine two sessions old, a transcript that cannot be opened, a
