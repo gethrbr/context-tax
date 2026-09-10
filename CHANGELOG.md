@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1
+
+No behaviour change, and one reason to cut it: `0.3.0` shipped two figures measured on a real
+machine. `tsc` keeps comments, so they reached `dist/` and therefore the published tarball, not just
+the repository, where a `grep` over `node_modules` found them on any machine that installed it.
+
+### Fixed
+
+- **No count from a developer's machine in anything that ships.** The audit that produced `0.3.0`
+  quoted its own reproduction, and two of the figures in it were real rather than fixture: a session
+  count, and a tally of `Agent` invocations against zero `Task`. A tool whose whole argument is that
+  nothing leaves your machine should not ship a count taken off one, however harmless the integer,
+  and `CONTRIBUTING.md` already says examples come from a fabricated fixture through the real
+  renderers. The replacement reproduces the same bug from a corpus that is nobody's history: twelve
+  sessions, every one of them belonging to another directory. The `Task` note now states what is
+  true of any corpus rather than what was true of one.
+
+  Comments only, which is why this is a patch: no behaviour, no API surface and no output changed.
+
+### Changed
+
+- `vitest` `3.2.7` to `5.0.0`, a development dependency that is not in the tarball. It collects and
+  runs the same 267 tests across the same 12 files on Node 20, 22 and 24. The lockfile's platform
+  binaries move off `@rollup/rollup-*` to rolldown and lightningcss, with no family losing an entry.
+
 ## 0.3.0
 
 Nine defects, found by auditing the published `0.2.1` against configurations nobody here designed:
