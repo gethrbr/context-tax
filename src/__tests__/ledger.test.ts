@@ -825,9 +825,9 @@ describe('a project with no history of its own', () => {
    * \u{1f6a8} The ceiling on the same rule, and the bug this exists to stop.
    *
    * Reproduced against the published `0.2.1`: a `.mcp.json` committed a year ago, in a directory
-   * that had never run Claude Code, was reported as `0 calls in 746 sessions on this machine since
-   * it was configured`. It was in context for none of those sessions. The window was real, and it
-   * was a window on something else.
+   * that had never run Claude Code, was reported as never called across every session on the
+   * machine. It was in context for none of them. The window was real, and it was a window on
+   * something else.
    */
   it('\u{1f6a8} will not borrow it for a server that exists only in this project', () => {
     const ledger = buildLedger(

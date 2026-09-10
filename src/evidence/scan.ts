@@ -136,8 +136,8 @@ function recordToolUse(acc: SessionAccumulator, name: string, input: Record<stri
   // before it was renamed `Agent`, and a machine with a year of sessions has both on disk. Reading
   // only the current name loses every older invocation, and an agent that looks uninvoked is what
   // makes its whole plugin look idle — which is the one lever that switches off four things at
-  // once. This machine has 109 `Agent` and no `Task`, which is exactly what a corpus that starts
-  // after the rename looks like, and exactly why it could not have been caught here.
+  // once. A corpus that begins after the rename holds nothing but `Agent`, which is why a machine
+  // with recent history cannot surface this at all and an older one is full of it.
   if (name === 'Agent' || name === 'Task') {
     const type = input ? asString(input.subagent_type) : null;
     if (type) bump(acc.agents, type);

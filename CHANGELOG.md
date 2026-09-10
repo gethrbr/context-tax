@@ -18,21 +18,22 @@ defend, in a place where saying nothing was available.**
   established that a denominator must cover everything its fix would switch off. It had no ceiling,
   so a project with too little history of its own borrowed the machine's for *everything*,
   including servers that exist in one directory. Measured against the published `0.2.1`, in a
-  directory that had never run Claude Code, against a `.mcp.json` committed a year earlier:
+  directory that had never run Claude Code, against a `.mcp.json` committed a year earlier, with a
+  fabricated corpus whose every session belongs to another directory:
 
   ```
   everything costs 740 tokens every turn and has never been called
-  0 calls in 746 sessions on this machine since it was configured.
+  0 calls in 12 sessions on this machine since it was configured.
   ```
 
-  It was in context for none of those 746 sessions, and the fix offered would have switched off a
-  server that never had a chance to be called. The window was real and it was a window on something
-  else. Widening is now earned by **reach** rather than by need: a `-s user` server and a plugin
-  the machine enabled are loaded in every session, so their silence everywhere is evidence, while a
-  `.mcp.json` server, a `~/.claude.json` entry filed under one project, and a plugin this repo
-  enabled are judged here or not at all. The same rule now applies per skill. Where nothing can be
-  judged the row says *no sessions yet, so there is nothing to go on*, which is what the tool
-  actually knows. See `ledger/reach.ts`.
+  It was in context for none of those 12 sessions, a real corpus puts hundreds in that sentence, and
+  the fix offered would have switched off a server that never had a chance to be called. The window
+  was real and it was a window on something else. Widening is now earned by **reach** rather than by
+  need: a `-s user` server and a plugin the machine enabled are loaded in every session, so their
+  silence everywhere is evidence, while a `.mcp.json` server, a `~/.claude.json` entry filed under
+  one project, and a plugin this repo enabled are judged here or not at all. The same rule now
+  applies per skill. Where nothing can be judged the row says *no sessions yet, so there is nothing
+  to go on*, which is what the tool actually knows. See `ledger/reach.ts`.
 
 - 🚨 **A server that failed to start is no longer priced from the bundled table.** The failure path
   reached for the fallback table before giving up, so a server whose package was one of the five in
@@ -62,8 +63,9 @@ defend, in a place where saying nothing was available.**
   it was renamed `Agent`, and a transcript is history: a machine with a year of sessions has both
   on disk. Only the current name was read, and an agent that looks uninvoked is what makes its
   whole plugin look idle, which is the one lever that switches off a plugin's servers, skills,
-  agents and commands together. This machine has 109 `Agent` and zero `Task`, which is what a
-  corpus that begins after the rename looks like, and why no run here could have caught it.
+  agents and commands together. A corpus that begins after the rename holds nothing but `Agent`,
+  which is why a machine with only recent history cannot surface this and an older one is full of
+  it.
 
 - **The calls column takes a dash where there is no history to count.** `0` is a measurement, and
   beside a note reading *no sessions yet* it was a measurement of nothing. `share` and `per call`

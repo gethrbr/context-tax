@@ -2,9 +2,9 @@
  * The ceiling on every denominator in the ledger: *where could this have been in context at all?*
  *
  * 🚨 Each case below is one wrong answer the tool used to be able to give. A `.mcp.json` server
- * judged against the machine's history was reported as never called across 746 sessions in which
- * it was never loaded, and the sentence carried a real number and a real window, which is what
- * made it worth fixing rather than worth caveating.
+ * judged against the machine's history was reported as never called across every session on it,
+ * none of which had ever loaded it, and the sentence carried a real number and a real window,
+ * which is what made it worth fixing rather than worth caveating.
  *
  * The direction of the default is the point of the last two tests: when provenance cannot be
  * established the answer is `project`, because refusing to widen makes no claim while widening
