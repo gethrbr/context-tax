@@ -6,12 +6,12 @@
  * that emitted a `disabledMcpjsonServers` entry for it would print a fix that silently does
  * nothing — worse than printing none.
  *
- * 🚨 **This resolver can only see local config, and that is not everything in the session.** The
- * claude.ai connectors (Apollo.io, Gmail, Google Calendar, Google Drive) appear as `mcp__*` tools
- * in transcripts on this machine while appearing in **no local file** — they are attached to the
- * account, not the checkout. Apollo alone is ~70 tool schemas. The join must therefore treat a
- * server seen in evidence but absent from config as *account-level or since-removed*, never drop
- * it, and never report the resolved list as the whole context.
+ * 🚨 **This resolver can only see local config, and that is not everything in the session.** A
+ * connector attached to a claude.ai account appears as `mcp__*` tools in transcripts while
+ * appearing in **no local file**: it belongs to the account, not the checkout, and one connector
+ * can be dozens of tools. The join must therefore treat a server seen in evidence but absent from
+ * config as *account-level or since-removed*, never drop it, and never report the resolved list as
+ * the whole context. The ledger lists the ones a session recorded sending: `evidence/record.ts`.
  */
 
 import { join } from 'node:path';
