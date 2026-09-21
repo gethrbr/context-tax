@@ -1,6 +1,6 @@
 {
   "name": "context-tax",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "What Claude Code sends on every turn before you type a word: what it costs, which of it you never used, and which of your skills never reached the agent.",
   "type": "module",
   "license": "MIT",
