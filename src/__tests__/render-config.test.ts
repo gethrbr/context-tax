@@ -84,6 +84,47 @@ describe('renderConfig', () => {
     expect(await render()).toContain('bodies load on use and are not counted');
   });
 
+  /**
+   * 🚨 The characters on disk are not what is sent. This screen used to print the sum of every
+   * description, which is the number the ledger stopped believing, one command away from it.
+   */
+  it('prints what the listing sends once it is over the cap, not what is on disk', async () => {
+    for (let index = 0; index < 12; index += 1) {
+      await mkdir(join(repo, '.claude', 'skills', `s${index}`), { recursive: true });
+      await writeFile(
+        join(repo, '.claude', 'skills', `s${index}`, 'SKILL.md'),
+        `---\nname: s${index}\ndescription: ${'d'.repeat(1_000)}\n---\n\nbody\n`,
+        'utf8',
+      );
+    }
+
+    const screen = await render();
+    // Twelve lines of about 1,000 characters are on disk. The listing is capped at 8,000.
+    expect(screen).toContain('caps the listing at 8,000 characters');
+    expect(screen).toContain('200,000-token window');
+    expect(screen).not.toMatch(/12,\d{3} characters of name \+ description\./);
+  });
+
+  it('does not count a skill it says is hidden as listed to the model', async () => {
+    for (const name of ['shown', 'silenced', 'typed-only']) {
+      await mkdir(join(repo, '.claude', 'skills', name), { recursive: true });
+      await writeFile(
+        join(repo, '.claude', 'skills', name, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: d\n${name === 'typed-only' ? 'disable-model-invocation: true\n' : ''}---\n\nbody\n`,
+        'utf8',
+      );
+    }
+    await writeFile(
+      join(repo, '.claude', 'settings.local.json'),
+      JSON.stringify({ skillOverrides: { silenced: 'off' } }),
+      'utf8',
+    );
+
+    const screen = await render();
+    expect(screen).toContain('1 listed to the model');
+    expect(screen).toContain('2 hidden from the model');
+  });
+
   it('says why a server is off, rather than only that it is', async () => {
     await writeFile(
       join(repo, '.mcp.json'),

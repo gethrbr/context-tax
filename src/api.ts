@@ -17,5 +17,8 @@ export * from './measure/index.js';
 export * from './resolve/index.js';
 export { renderLedger } from './render/ledger.js';
 export { renderPlan, renderApplied } from './render/fix.js';
+export { renderReceipt } from './render/receipt.js';
+export { renderSession, renderSessionSvg, sessionCaption } from './render/session.js';
+export type { SessionView } from './render/session.js';
 export { colourEnabled, palette } from './render/color.js';
 export type { Palette } from './render/color.js';

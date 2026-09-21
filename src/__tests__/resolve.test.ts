@@ -152,6 +152,52 @@ describe('skills', () => {
     expect(config.skills.map((entry) => entry.name)).toEqual(['real']);
   });
 
+  it('reads when_to_use and disable-model-invocation, which decide what the listing is sent', async () => {
+    await write(
+      join(home, '.claude', 'skills', 'deploy', 'SKILL.md'),
+      '---\nname: deploy\ndescription: Ships the service.\nwhen_to_use: Before a release.\n---\n',
+    );
+    await write(
+      join(home, '.claude', 'skills', 'typed', 'SKILL.md'),
+      '---\nname: typed\ndescription: Only ever typed.\ndisable-model-invocation: true\n---\n',
+    );
+
+    const { config } = await resolve();
+    const byName = new Map(config.skills.map((entry) => [entry.name, entry]));
+    expect(byName.get('deploy')).toMatchObject({ whenToUse: 'Before a release.', modelInvocable: true });
+    expect(byName.get('typed')).toMatchObject({ whenToUse: null, modelInvocable: false });
+  });
+
+  it('leaves the listing settings unset on a config that never mentions them', async () => {
+    const { config } = await resolve();
+    expect(config.skillListing).toMatchObject({ budgetFraction: null, maxDescChars: null });
+  });
+
+  it('reads the listing budget from settings, the more specific file winning', async () => {
+    await write(join(home, '.claude', 'settings.json'), { skillListingBudgetFraction: 0.02, skillListingMaxDescChars: 500 });
+    await write(join(repo, '.claude', 'settings.json'), { skillListingBudgetFraction: 0.05 });
+
+    const { config } = await resolve();
+    expect(config.skillListing).toMatchObject({ budgetFraction: 0.05, maxDescChars: 500 });
+  });
+
+  it('takes SLASH_COMMAND_TOOL_CHAR_BUDGET from a settings env block and nothing else out of it', async () => {
+    await write(join(repo, '.claude', 'settings.json'), {
+      env: { SLASH_COMMAND_TOOL_CHAR_BUDGET: '30000', SERVICE_API_KEY: 'not-a-real-key' },
+    });
+
+    const { config } = await resolve();
+    expect(config.skillListing.envBudgetChars).toBe(30_000);
+    expect(JSON.stringify(config)).not.toContain('not-a-real-key');
+  });
+
+  it('treats a budget that is not a positive number as not set, rather than as zero', async () => {
+    await write(join(repo, '.claude', 'settings.json'), { skillListingBudgetFraction: 'lots', skillListingMaxDescChars: -5 });
+
+    const { config } = await resolve();
+    expect(config.skillListing).toMatchObject({ budgetFraction: null, maxDescChars: null });
+  });
+
   it('reports a SKILL.md with no frontmatter as a problem rather than registering it', async () => {
     await write(join(home, '.claude', 'skills', 'broken', 'SKILL.md'), '# no frontmatter\n');
 
@@ -366,14 +412,17 @@ describe('sessionsSince', () => {
       sessionId: id,
       file: `${id}.jsonl`,
       kind,
+      headless: false,
       cwd: '/repo',
       turns: 1,
       sidechainTurns: 0,
       coldStartTokens: null,
       contextTokens: 0,
+      peakContextTokens: 0,
       outputTokens: 0,
       firstSeen,
       lastSeen: firstSeen,
+      record: null,
     }) satisfies SessionEvidence;
 
   it('counts only sessions that started after the config did', () => {

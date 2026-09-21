@@ -2,7 +2,8 @@
 
 # context-tax
 
-**What Claude Code's context costs you on every turn, and which of it you never used.**
+**What Claude Code sends on every turn before you type a word: what it costs, which of it you never
+used, and which of it never reached your agent at all.**
 
 [![npm](https://img.shields.io/npm/v/context-tax?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/context-tax)
 [![CI](https://img.shields.io/github/actions/workflow/status/gethrbr/context-tax/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci)](https://github.com/gethrbr/context-tax/actions/workflows/ci.yml)
@@ -24,8 +25,10 @@ Every article about MCP context bloat ends with the same advice: **audit which t
 actually calls, and prune the rest.** None of them automate that sentence. They tell you to do it by
 hand.
 
-This does it for you. It reads what your config loads, measures what that weighs, reads your own
-session transcripts for what you actually called, and multiplies.
+This does it for you. Your session transcripts already record what Claude Code sent to the model, so
+it reads that instead of guessing: the skill listing as it went out, the tool names, your instruction
+files, the client's own tools. It reads the same transcripts for what you actually called, and
+multiplies.
 
 No install, no account, no sign-up, no telemetry, no LLM call, and no `context-tax` server for
 anything to be sent to.
@@ -34,9 +37,11 @@ anything to be sent to.
 
 |  |  |
 |:--|:--|
-| **Exact where it can be** | The per-turn total comes from the `usage` your API calls were billed on, not from a guess |
-| **Cost per *use*, not per turn** | A 800-token server used once in 96 sessions cost you 34M tokens, and that is the number that changes minds |
+| **Read, not modelled** | Rows come from what your last session sent, measured on the text itself. The per-turn total comes from the `usage` your API calls were billed on |
+| **What your agent never received** | Past its budget, Claude Code sends a skill as a bare name with no description. This counts them, says whose they are, and prices sending them all |
+| **Cost per *use*, not per turn** | A 400-token server used once in 96 sessions cost you 17M tokens, and that is the number that changes minds |
 | **It writes the fix** | `context-tax fix` routes each finding to the lever that actually turns that thing off |
+| **Two screens made to be shared** | A [receipt](#the-receipt) and a [picture of one session](#one-session-as-a-picture), with no server name, skill name or path on either |
 | **Zero runtime dependencies** | Not "few". None. [Asserted by a test](#zero-dependencies-and-a-test-that-proves-it) against the import graph |
 
 <br>
@@ -45,6 +50,9 @@ anything to be sent to.
 
 - [The report](#the-report)
 - [Reading the table](#reading-the-table)
+- [What your agent never received](#what-your-agent-never-received)
+- [The receipt](#the-receipt)
+- [One session as a picture](#one-session-as-a-picture)
 - [`context-tax fix`](#context-tax-fix)
 - [Commands and flags](#commands-and-flags)
 - [How it works](#how-it-works)
@@ -68,63 +76,99 @@ anything to be sent to.
   on this machine: 96 sessions, 42,900 turns, 1.7B tokens of context carried.
   You typed /clear 118, /compact 31.
 
-  40,000 tokens on every turn, 2,400 of them recoverable from 5 findings below.
+  40,000 tokens on every turn, 20% of a window of about 200,000, before you type
+  a word. 1,900 of them are recoverable from the 7 findings below.
 
   ┌───────────────────────┬──────────┬───────────┬────────┬────────┬───────────┐
   │ MCP SERVERS           │   tokens │  deferred │  share │  calls │  per call │
   ├───────────────────────┼──────────┼───────────┼────────┼────────┼───────────┤
-  │ figma                 │      800 │      +610 │     2% │      0 │         - │
-  │ github                │    1,200 │    +3,180 │     3% │    214 │      241K │
-  │ linear                │      800 │    +2,040 │     2% │      3 │       11M │
+  │ figma                 │      300 │    +1,110 │     1% │      0 │         - │
+  │ github                │      700 │    +3,680 │     2% │    214 │      140K │
+  │ linear                │      300 │    +2,540 │     1% │      3 │      4.3M │
   │ postgres              │        - │         - │      - │      0 │         - │
-  │ sentry                │      800 │    +5,900 │     2% │      1 │       34M │
+  │ sentry                │      400 │    +6,300 │     1% │      1 │       17M │
+  │ claude_ai_Notion      │      900 │         - │     2% │      2 │       19M │
   ├───────────────────────┼──────────┼───────────┼────────┼────────┼───────────┤
-  │ 14 skills             │    1,200 │         - │     3% │      1 │         - │
+  │ 31 skills             │    2,000 │         - │     5% │      1 │         - │
   │ 11 agents             │    2,400 │         - │     6% │      - │         - │
   │ 2 memory files        │    1,600 │         - │     4% │      - │         - │
+  │ your hooks            │      400 │         - │     1% │      - │         - │
   ├───────────────────────┼──────────┼───────────┼────────┼────────┼───────────┤
-  │ unattributed          │   31,200 │           │    78% │        │           │
+  │ CLAUDE CODE ITSELF    │          │           │        │        │           │
+  │ its 14 tools          │   22,000 │         - │    55% │      - │         - │
+  │ its system prompt     │    3,200 │         - │     8% │      - │         - │
+  │ its tool name list    │      400 │         - │     1% │      - │         - │
+  │ its session details   │      600 │         - │     2% │      - │         - │
+  ├───────────────────────┼──────────┼───────────┼────────┼────────┼───────────┤
+  │ unattributed          │    4,800 │           │    12% │        │           │
   │ EVERY TURN            │   40,000 │           │   100% │        │           │
   └───────────────────────┴──────────┴───────────┴────────┴────────┴───────────┘
     postgres: configured but off, so nothing was started to measure
-    14 skills: a skill listing is one line each; the useful unit is the skill,
-      below
+    31 skills: as sent in your session of 2026-09-01: 9 skills went as a name
+      with no description, because Claude Code caps this listing at about 8,000
+      characters, its share of a window of about 200,000 tokens
     11 agents: agent listings are not separable from the prompt
     2 memory files: the model reads these, it does not call them, so no log
       can say which lines were used
+    your hooks: what your hooks put in front of the first turn. A hook that
+      adds context on every prompt adds this much again each time
+    its 14 tools, its system prompt, its tool name list, its session details:
+      sent by Claude Code itself on every turn, so there is nothing here to
+      switch off
     EVERY TURN is exact, from usage. Median cold start across your 10 most
     recent sessions, 2026-08-24 to 2026-09-01.
+    Rows are what your session of 2026-09-01 sent, read from its transcript. A
+    row that says otherwise was weighed from your config.
     token counts are chars/4, measured within 4%; a server's schemas are counted
     whole, which is what you pay only if your client does not defer them.
     tokens: what every turn carries. deferred: the schemas behind it, paid when
     something loads them.
 
   FINDINGS
-    1. figma costs 800 tokens every turn and has never been called
+    1. 9 of your 31 skills reach the model as a name with no description
+       design-kit 7 of 12, your own 2 of 14 (release-notes, db-migrate). A bare
+       name gives the model nothing to choose a skill by. The cap is about 8,000
+       characters and yours needs about 11,640. From your session of 2026-09-01;
+       who loses out shifts with recent use.
+       fix: set skillListingBudgetFraction to 0.015 and every description is
+       sent, for about 910 more tokens on every turn (context-tax fix
+       --restore-descriptions writes it). Or make room: each skill switched off
+       below hands its space to another description
+    2. figma costs 300 tokens every turn and has never been called
        0 calls in 96 sessions since it was configured. Loading its schemas costs
-       610 tokens more, every time something does.
+       1,110 tokens more, every time something does.
        fix: add "figma" to disabledMcpjsonServers in
        ~/projects/storefront/.claude/settings.local.json
-    2. github: 9 of its 26 tools have never been called
+    3. github: 9 of its 26 tools have never been called
        create_gist, delete_file, fork_repo, list_gists, ... Their names and
        descriptions cost 415 tokens on every turn, and 1,102 tokens of schema
        you have never used waits behind them.
        fix: MCP has no per-tool switch. Ask the server for a narrower tool set,
        or drop the server.
-    3. linear is loaded on every turn and used in 3 of 96 sessions on this
+    4. linear is loaded on every turn and used in 3 of 96 sessions on this
        machine
-       800 tokens re-sent across 42,900 turns for 3 calls: 11,440,000 tokens of
-       standing cost per use. Loading its schemas costs 2,040 tokens more, every
+       300 tokens re-sent across 42,900 turns for 3 calls: 4,290,000 tokens of
+       standing cost per use. Loading its schemas costs 2,540 tokens more, every
        time something does.
        fix: claude mcp remove linear -s user
-    4. sentry is loaded on every turn and used in 1 of 96 sessions
-       800 tokens re-sent across 42,900 turns for 1 call: 34,320,000 tokens of
-       standing cost per use. Loading its schemas costs 5,900 tokens more, every
+    5. sentry is loaded on every turn and used in 1 of 96 sessions
+       400 tokens re-sent across 42,900 turns for 1 call: 17,160,000 tokens of
+       standing cost per use. Loading its schemas costs 6,300 tokens more, every
        time something does.
        fix: add "sentry" to disabledMcpjsonServers in
        ~/projects/storefront/.claude/settings.local.json
-    5. 13 skills never invoked, either way
-       changelog-writer, commit-helper, design-review, ...
+    6. claude_ai_Notion is sent on every turn and used in 2 of 96 sessions on
+       this machine
+       900 tokens of tool names and instructions across 42,900 turns for 2
+       calls. No file on this machine declares it, so its age is unknown and the
+       per-call figure is an upper bound.
+       fix: no file here declares it, so there is nothing for this tool to edit.
+       /mcp in a session shows where it is connected from, and a claude.ai
+       connector is switched off in your claude.ai settings
+    7. 13 skills never invoked, either way
+       The listing is over its budget, so most of what this frees goes to
+       another description rather than out of the prompt. changelog-writer,
+       commit-helper, design-review, ...
        fix: set each to off in skillOverrides, or delete the ones you do not
        recognise
 
@@ -134,10 +178,11 @@ anything to be sent to.
     inside them your agent actually used. Nothing in a log can: that needs the
     model's attention, not your history.
 
-    MCP connectors attached to your claude.ai account are also real context and
-    appear in no file on this machine. Run /context in a session to see them.
+    MCP connectors attached to your claude.ai account appear in no file on this
+    machine. The ones your session connected are rows above, read from what it
+    sent.
 
-  2,400 tokens per turn recoverable from the findings above.
+  1,900 tokens per turn recoverable from the findings above.
   context-tax measure   what each line weighs, and how
   context-tax config    what is loaded, and from where
 ```
@@ -146,25 +191,150 @@ anything to be sent to.
 
 ## Reading the table
 
+**The first line is the whole report in one sentence.**
+How much is sent before you type, what share of your window that is, and how much of it you can get
+back. The share is only printed when a session proves the window it is a share of. Without one there
+is no percentage at all, because a percentage of an assumed window is a guess wearing a decimal point.
+
 **`per call` is the column that changes behaviour.**
 A total makes people shrug, because every total looks like the cost of doing business. Cost per use
-reads as a bill. The `sentry` row is not expensive because 800 tokens is a lot. It is expensive
-because those 800 tokens were re-sent on every one of 42,900 turns, to be used once.
+reads as a bill. The `sentry` row is not expensive because 400 tokens is a lot. It is expensive
+because those 400 tokens were re-sent on every one of 42,900 turns, to be used once.
+
+**The rows are read from what a session sent.**
+A recent Claude Code writes what it sent into the session transcript: the skill listing, the tool
+names, each instruction file, its own tools and system prompt. The line under the table names the
+session the rows came from. With no such session on the machine, the rows are weighed from your
+config instead, and the same line says that.
 
 **`deferred` is the column nothing else knows to print.**
-Current Claude Code does not put an MCP server's tool *schemas* in the prompt. It leaves the names
-and descriptions in a listing and loads a schema when something reaches for it. So a server has two
-costs, paid at different times, and one number would have to pick a lie.
+Current Claude Code does not put an MCP server's tool *schemas* in the prompt. It sends the tool
+names and the server's instructions, and loads a schema when something reaches for it. So a server
+has two costs, paid at different times, and one number would have to pick a lie.
+
+**`claude_ai_Notion` appears in no file on the machine.**
+A connector attached to a claude.ai account is real context, and no config file declares it. It is a
+row here because the session sent it. There is nothing for `fix` to edit, so the finding says where
+it is switched off instead.
+
+**`CLAUDE CODE ITSELF` is the part you cannot switch off.**
+The client's own tools and system prompt are usually the largest lines on the screen. They are
+itemised so the rows above them read in proportion: on the invented machine above, every MCP server
+together is about an eighth of what the built-in tools weigh.
 
 **`unattributed` is the honest remainder.**
-The total is exact, from `usage`. The rows are estimates from serialized bytes. The difference gets
-its own row instead of being smeared across the numbers above it.
+The total is exact, from `usage`. The rows are measured on text, and tokens are estimated from
+characters. The difference gets its own row instead of being smeared across the numbers above it.
 
-**A `-` is not a `0`.**
+**A `-` is not a `0`, and a `0` is not a guess.**
 `postgres` is configured but switched off, so it was never started to find out what it weighs.
 Reporting `0` there would under-report your tax and quietly recommend keeping something you pay for.
-Two dead servers on a real machine is common, and neither had ever been noticed, because a server
-that fails to load fails silently.
+A server that does show `0` is one the session tried and could not connect to: it sent nothing, and
+the row says so, because a server that fails to load fails silently everywhere else.
+
+<br>
+
+## What your agent never received
+
+Claude Code gives the skill listing a budget: 1% of the context window, in characters. Every skill
+keeps its name. Descriptions compete for what is left, and the ones that lose are sent as a bare
+name. A bare name gives the model nothing to choose a skill by, so a skill you installed last week
+can be invisible in every session since, and nothing on screen says so.
+
+It is the first finding when it happens (finding 1 in the report above), because it is the only one
+about what your agent is missing rather than what you are overpaying.
+
+It is read from the listing a session sent, entry by entry, so it is a count and not an estimate. It
+is grouped by who owns the skills, because the usual cause is one large plugin crowding out your own.
+And it prices the two ways out: raise `skillListingBudgetFraction` and pay for every description, or
+switch skills off below and hand their room to the ones you want.
+
+`context-tax fix --restore-descriptions` writes the first one. It is never part of a plain `fix`,
+because it is the one change in this tool that makes every turn cost **more**, and that should be
+something you asked for by name.
+
+<br>
+
+## The receipt
+
+```bash
+npx context-tax receipt
+```
+
+The main screen names your servers, plugins and paths, because you are about to edit them. The
+receipt is for everyone else. It carries kinds and numbers, and not one name.
+
+```
+                   CONTEXT TAX
+       sent on every turn, before you type
+  ----------------------------------------------
+  Claude Code's own tools (14)            22,000
+  Claude Code's system prompt              3,200
+  MCP servers (5)                          2,600
+  Agent listing (11)                       2,400
+  Skill listing (31)                       2,000
+    9 sent as a name, no description
+  Instruction files (2)                    1,600
+  Tool names, session details              1,000
+  Your hooks                                 400
+  Not itemised                             4,800
+  ----------------------------------------------
+  TOTAL PER TURN                          40,000
+  20% of a window of about 200,000 tokens
+  ----------------------------------------------
+  PAID                              42,900 turns
+                             1.7B tokens carried
+  RECOVERABLE PER TURN                     1,900
+  ----------------------------------------------
+  npx context-tax                     2026-09-02
+  read from what a session sent · chars/4
+```
+
+<br>
+
+## One session as a picture
+
+```bash
+npx context-tax session                  # your longest session here, in the terminal
+npx context-tax session --svg tax.svg    # the same picture as an image
+npx context-tax session 4f2a             # a session by the start of its id
+```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gethrbr/context-tax/main/docs/session.svg" alt="One coding-agent session, turn by turn: context climbs, the client compacts, and it never drops under the fixed prefix" width="820">
+</p>
+
+A long session is a sawtooth. Context climbs, the client compacts, it drops, it climbs again. The
+drop never reaches the bottom of the chart. The band it lands on is the fixed prefix: the same tokens
+the main screen itemises, sent again on the turn after every compaction and on every turn between.
+
+```
+  context-tax session  2026-09-01
+
+   186K │                            ▂▇█                          ▂▃          
+        │              ▃▆▇         ▁▆███                        ▂▆██          
+        │            ▃▇███        ▅█████          ▂▆▆         ▂▆████          
+        │          ▅██████      ▂███████        ▃▆███       ▁▆██████          
+        │       ▁▅████████     ▆████████      ▃▇█████     ▁▆████████        ▃▆
+        │     ▁▄██████████   ▃██████████    ▂▇███████    ▄██████████     ▁▄███
+        │   ▁▅████████████  ▆███████████  ▂▆█████████  ▃████████████   ▂▆█████
+        │  ▄██████████████▁█████████████ ▅███████████▁▆█████████████ ▃▇███████
+        │▂██████████████████████████████████████████████████████████▇█████████
+    41K │█████████████████████████████████████████████████████████████████████
+        │█████████████████████████████████████████████████████████████████████
+      0 │█████████████████████████████████████████████████████████████████████
+        └────────────────▴─────────────▴────────────▴──────────────▴──────────
+
+  640 turns, peak 186,000 tokens, compacted 4 times, and never under 41,200.
+  ▴ marks a compaction. The band at the bottom is what a compaction cannot
+  remove: 41,200 tokens. The session opened at 40,000, before a word of work,
+  and that is the part the main screen itemises.
+
+  context-tax session --svg <file>   the same picture, to post
+```
+
+Every value is exact, from the `usage` on each reply. The image carries numbers and nothing else: no
+path, no session id, no project name.
 
 <br>
 
@@ -173,8 +343,9 @@ that fails to load fails silently.
 The report is the easy half. This is the half that changes something.
 
 ```bash
-npx context-tax fix --dry-run     # show every line that would change, then stop
-npx context-tax fix               # show it, ask, then write
+npx context-tax fix --dry-run                  # show every line that would change, then stop
+npx context-tax fix                            # show it, ask, then write
+npx context-tax fix --restore-descriptions     # also raise the skill listing budget
 ```
 
 ### 1. It shows you the literal bytes
@@ -189,7 +360,7 @@ describes, so what you confirm is the diff itself.
       disable the figma MCP server
         0 calls in 96 sessions since it was configured.
       disable the sentry MCP server
-        1 call in 96 sessions: 34,320,000 tokens of standing cost per use.
+        1 call in 96 sessions: 17,160,000 tokens of standing cost per use.
       set the changelog-writer skill to off
         Never invoked by you or by the model in 96 sessions.
       set the design-review skill to user-invocable-only
@@ -214,18 +385,23 @@ describes, so what you confirm is the diff itself.
     that file nor backs it up: a backup would be a second copy of every
     credential.
 
-    linear: 3 calls in 96 sessions on this machine, 11,440,000 tokens of
+    linear: 3 calls in 96 sessions on this machine, 4,290,000 tokens of
     standing cost per use.
     It is declared in ~/.claude.json, which this tool does not write.
       claude mcp remove linear -s user
 
-  1,805 tokens per turn recovered by the changes above.
+  700 tokens per turn recovered by the changes above.
 ```
 
 Notice the fourth action. `design-review` is not switched off, it is demoted to
 `user-invocable-only`: typing `/design-review` keeps working, and only the description leaves the
-model's prompt. That is a saving at **zero** loss of function, and a blunt on/off tool cannot express
-it, so it tells you to delete something you use.
+model's prompt. That costs you **zero** function, and a blunt on/off tool cannot express it, so it
+tells you to delete something you use.
+
+Notice the last line too. The two servers are the whole 700. The two skills add nothing to it here,
+because this listing is over its budget: the room a skill gives up goes to a description that was
+being dropped, not out of the prompt. That is the better outcome and a smaller number, and the
+number printed is the one the change delivers.
 
 ### 2. It asks
 
@@ -254,6 +430,8 @@ while looking like it worked.
 | `~/.claude.json` | **prints `claude mcp remove <name> -s <scope>` for you to run** |
 | a plugin | sets `enabledPlugins["<plugin>@<marketplace>"]: false`, scoped to this project |
 | a skill | writes the right one of the four `skillOverrides` states |
+| a claude.ai connector, or anything else no file declares | **says where it is switched off**, because there is no file here to edit |
+| skills sent with no description | `--restore-descriptions` sets `skillListingBudgetFraction`, and only when you pass it |
 
 ### The rails on the write path
 
@@ -268,6 +446,9 @@ writes, and it should not be reachable by adding one word to a command you ran f
 - **Never rewrites a settings file that does not parse.** A malformed one is usually a half-finished
   hand edit, and replacing it loses work. It is reported under `NOT TOUCHED` instead
 - **Idempotent.** Run it twice and the second run says *already applied*
+- **Never raises your per-turn cost unasked.** `--restore-descriptions` is the one change that adds
+  tokens, so it is off unless you name it, it prints what it adds, and it never lowers a budget you
+  have already set higher
 - **Never touches `~/.claude.json`.** That file sits beside your API keys and bearer tokens. It is
   not rewritten and not backed up either, because a backup would be a second copy of every
   credential on your machine
@@ -279,6 +460,8 @@ writes, and it should not be reachable by adding one word to a command you ran f
 ```
 context-tax             what your context costs and whether you used it   (default)
 context-tax fix         execute the findings, after showing every changed line
+context-tax receipt     the same totals with no names on them, to share
+context-tax session     one session turn by turn: the climb, the compactions, the floor
 context-tax config      what is loaded here, and where each piece came from
 context-tax measure     what each line item weighs, and how it was measured
 context-tax evidence    what your sessions actually used
@@ -297,6 +480,8 @@ context-tax evidence    what your sessions actually used
 | `--timeout <s>` | per server, default 10 |
 | `--dry-run` | `fix`: show the diff and stop |
 | `--yes`, `-y` | `fix`: skip the confirmation |
+| `--restore-descriptions` | `fix`: also raise the skill listing budget so every description is sent |
+| `--svg <file>` | `session`: write the picture as an SVG |
 | `--no-color` | plain text (`NO_COLOR` is honoured too) |
 
 <br>
@@ -315,8 +500,12 @@ Four passes and one join, kept apart because they fail differently.
 |:--|:--|:--|
 | `resolve/` | What is loaded here: the settings chain, `.mcp.json`, `~/.claude.json`, plugins, skills, agents, memory | Exact, but incomplete |
 | `measure/` | What it weighs. Performs the same `initialize` then `tools/list` handshake your agent performs at session start, against the servers already in your config, over stdio, streamable HTTP or legacy SSE | Estimated |
-| `evidence/` | What you called. Parses every local transcript for `tool_use` blocks and `usage`, machine-wide, so a directory with no history of its own still has a denominator | Exact, it is what you were billed |
+| `evidence/` | What you called, and what was sent. Parses every local transcript for `tool_use` blocks and `usage`, machine-wide, so a directory with no history of its own still has a denominator. Reads the record a recent client keeps of what it put in the prompt, and keeps sizes and names, never the text | Exact, it is what you were billed and what was sent |
 | `ledger/` | The multiplication, and a verdict per row | The join |
+
+The rows come from the record when a session kept one. `measure` still runs, for two things the
+record cannot say: the `deferred` column, which is the schemas a session never loaded, and any server
+or machine with no recorded session to read.
 
 To measure a server you have to start it. So `measure` prints every host it spoke to, caches schemas
 for a week keyed on the **names** of your environment variables and never their values, and **will
@@ -398,6 +587,55 @@ exits non-zero instead of printing a negative remainder.
 </details>
 
 <details>
+<summary><b>A skill is costed as what was sent, not as what is on disk</b></summary>
+<br>
+
+Claude Code caps the skill listing at 1% of the context window, in characters: 8,000 on a
+200,000-token window, 40,000 on a million. Past that every skill keeps its name and descriptions
+compete for what is left, so sixty skills of 1,000 characters each cost the budget that is sent, not
+the 60,000 on disk. One large plugin is enough to be over.
+
+The row is read from the listing your session sent, so it includes the client's own bundled skills,
+which appear in no file. The window is not assumed either. It is worked back from that listing: the
+budget has to sit between the size of what was sent and what the smallest dropped description would
+have needed, and the window is that budget divided by your fraction. That is why the screen says
+*about*. A listing that fits proves nothing about the window, so then no window is claimed and no
+percentage is printed.
+
+With no recorded session the row is modelled from the files on disk, and it says so: *modelled,
+because no session here recorded its listing*, with the window it guessed and why.
+
+Two things follow either way. Past the budget, switching a few skills off recovers close to nothing,
+because the room goes to another description, so a saving here is always the listing before minus the
+listing after. And only a skill with a lever counts as recoverable: a plugin skill in a plugin you
+use has no switch, and a number promised for it is a number `fix` can never deliver. The headline
+and the `fix` plan are the same figure for that reason.
+
+</details>
+
+<details>
+<summary><b>One reply is counted once</b></summary>
+<br>
+
+Claude Code writes a single API reply as several transcript lines, one per content block, and each
+line repeats the reply's `usage`. Counting lines counts a reply about twice. Every turn count, every
+"tokens of context carried" and every per-call figure is taken once per reply id. Versions before
+0.4.0 counted lines, so their turn and per-call figures ran at about twice the truth.
+
+</details>
+
+<details>
+<summary><b>A server that did not connect is not charged</b></summary>
+<br>
+
+A server in your config that the session could not reach sent nothing, so its row is `0` and says
+*could not connect*, with what it weighs when it does start. It gets no finding: there is nothing to
+recover from a server that costs nothing, and the useful news is that it is broken. A server added
+after the recorded session began is weighed instead, because that session could not have sent it.
+
+</details>
+
+<details>
 <summary><b>A mistyped <code>--cwd</code> is an error, not a report</b></summary>
 <br>
 
@@ -440,6 +678,12 @@ whole of its network activity, and all of it is to hosts you chose.
 - **It reads every transcript under `~/.claude/projects`, and none of it leaves.** The whole corpus
   is read so a project with no history of its own can still be given a denominator. It is a local
   read of files you already have: nothing is uploaded, cached off-machine or written back.
+- **What was sent is measured, not kept.** The transcript record holds the full text of your
+  instruction files and skill descriptions. The parser takes lengths, counts and names from it and
+  drops the text on the same line, so none of it reaches the report, `--json`, or the library API.
+  A test asserts that.
+- **The receipt and the session image carry no names.** Not a server, plugin, skill, path, project or
+  session id. They are the two screens made to be posted, and both are pinned by a test.
 - **No model call.** Every verdict is arithmetic.
 - **No credentials read or copied.** Schema caching is keyed on the *names* of environment
   variables, never their values, and `~/.claude.json` is never written or backed up.
@@ -474,7 +718,19 @@ for (const finding of ledger.findings) {
 }
 ```
 
-`planFixes` and `applyFixes` are exported too, so the write path is available without the CLI.
+`planFixes` and `applyFixes` are exported too, so the write path is available without the CLI. So
+are the two shareable screens and the series behind the picture:
+
+```ts
+import { readSessionSeries, renderSessionSvg, renderReceipt, palette } from 'context-tax';
+
+const series = await readSessionSeries(pathToOneTranscript);
+const svg = renderSessionSvg({ series, openedAt: null });
+const receipt = renderReceipt(ledger, palette(false), '2026-09-02');
+```
+
+`evidence.sessions[n].record` is what that session sent, as sizes, counts and names. The text it was
+measured on is never on it.
 
 > [!WARNING]
 > `resolveConfig` returns `{ config, launch }`. Only `config` is safe to serialize. `launch` holds
@@ -530,9 +786,14 @@ anything defensible. The table still prints, so you can see the cost even where 
 <summary><b>Why is <code>unattributed</code> so large?</b></summary>
 <br>
 
-Because it is honest. It holds the base system prompt, the built-in tool schemas, and anything this
-tool cannot see. Those are real tokens you pay and it would be easy to hide them by only totalling
-the rows. They are shown so the percentages mean something.
+With a recent Claude Code it should not be. The client's own tools and system prompt used to live in
+this row, and they are now itemised under `CLAUDE CODE ITSELF`, read from what the session sent. What
+is left is the gap between text measured in characters and tokens billed, plus anything the client
+sends without recording it.
+
+On a machine whose sessions predate that record it is still large, because it still holds the system
+prompt and the built-in tool schemas. Those are real tokens you pay, and it would be easy to hide
+them by only totalling the rows. They are shown so the percentages mean something.
 
 </details>
 
@@ -544,7 +805,7 @@ the rows. They are shown so the percentages mean something.
 npm install
 npm run typecheck    # tsc --noEmit, strict
 npm run lint         # eslint, no-explicit-any is an error
-npm test             # 193 tests
+npm test             # vitest
 npm run build
 ```
 

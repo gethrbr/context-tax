@@ -20,7 +20,7 @@ import { unifiedDiff } from '../fix/diff.js';
 import { applyFixes, backupRoot, planFixes } from '../fix/index.js';
 import { detectIndent, editSettings, FixError } from '../fix/json.js';
 import { palette } from '../render/color.js';
-import { renderApplied } from '../render/fix.js';
+import { renderApplied, renderPlan } from '../render/fix.js';
 import type { FixAction, SettingsAction } from '../fix/types.js';
 
 function action(overrides: Partial<SettingsAction> = {}): SettingsAction {
@@ -100,6 +100,47 @@ describe('editing a settings file somebody maintains by hand', () => {
       enabledMcpjsonServers: ['keep'],
       disabledMcpjsonServers: ['ghost'],
     });
+  });
+});
+
+/**
+ * The one edit that adds to every turn: sending every skill description again.
+ */
+describe('raising the skill listing budget', () => {
+  const raise = { kind: 'listing-budget', fraction: 0.03, adds: 14_872 } as const;
+
+  it('writes the fraction, and nothing else in the file moves', () => {
+    const before = '{\n  "model": "opus"\n}\n';
+    const { after, applied } = editSettings(before, [raise]);
+    expect(after).toBe('{\n  "model": "opus",\n  "skillListingBudgetFraction": 0.03\n}\n');
+    expect(applied).toHaveLength(1);
+  });
+
+  it('🚨 never lowers a budget somebody already set higher', () => {
+    const before = '{\n  "skillListingBudgetFraction": 0.05\n}\n';
+    const result = editSettings(before, [raise]);
+    expect(result.after).toBe(before);
+    expect(result.already).toHaveLength(1);
+  });
+
+  it('counts what it adds apart from what the plan recovers', async () => {
+    const plan = await planFixes(
+      [
+        action({ kind: 'disable-mcpjson-server', server: 'a', saves: 800 }),
+        action({ ...raise, saves: 0 } as Partial<SettingsAction>),
+      ],
+      { readText: async () => null },
+    );
+    expect(plan.saves).toBe(800);
+    expect(plan.adds).toBe(14_872);
+  });
+
+  it('says what it costs on the screen that asks for confirmation', async () => {
+    const plan = await planFixes([action({ ...raise, saves: 0 } as Partial<SettingsAction>)], { readText: async () => null });
+    const screen = renderPlan(plan, palette(false), 80);
+    expect(screen).toContain('raise the skill listing budget to 0.03 of the window');
+    expect(screen).toContain('14,872 tokens per turn added: the cost of sending every description.');
+    for (const text of screen.split('\n')) expect(text.length).toBeLessThanOrEqual(80);
   });
 });
 

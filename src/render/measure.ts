@@ -216,6 +216,14 @@ export function renderMeasure(
     4,
     colour.dim,
   );
+  // This pass weighs a config. The main screen reads a session, and where the two disagree the
+  // session is right: it is what was sent, and this is what would be.
+  say(
+    'weighed from your config, with the skill listing capped as on a 200,000-token window. The main' +
+      ' screen reads what a session sent, and is the one to believe where they differ.',
+    4,
+    colour.dim,
+  );
   say(
     `the deferred schemas add ${n(measure.measuredTokens - measure.residentTokens)} more, paid when` +
       ' something loads them, or on every turn if your client does not defer',

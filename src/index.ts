@@ -3,6 +3,8 @@
  * The CLI.
  *
  *   `context-tax`            cost joined against usage, with a verdict per row   (the product)
+ *   `context-tax receipt`    the same total as an itemised receipt, with nothing identifying on it
+ *   `context-tax session`    one session's context turn by turn, as a chart or an SVG
  *   `context-tax fix`        execute the recommendations, after showing the diff
  *   `context-tax config`     what is loaded here right now
  *   `context-tax measure`    what it weighs, per server, per skill, per file
@@ -17,12 +19,13 @@
  * and the part that must never be bypassed is the part that must be easiest to read.
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { resolve as resolvePath } from 'node:path';
 
 import { HELP, parseArgs } from './args.js';
 import { scanEvidence } from './evidence/index.js';
+import { readSessionSeries } from './evidence/series.js';
 import { applyFixes, planFixes } from './fix/index.js';
 import { buildLedger } from './ledger/index.js';
 import { measureContext } from './measure/index.js';
@@ -33,6 +36,8 @@ import { hangingText, screenWidth } from './render/layout.js';
 import { progress, startingLabel } from './render/progress.js';
 import { renderLedger } from './render/ledger.js';
 import { renderMeasure } from './render/measure.js';
+import { renderReceipt } from './render/receipt.js';
+import { renderSession, renderSessionSvg } from './render/session.js';
 import { resolveConfig } from './resolve/index.js';
 import { trustsProjectServers } from './trust.js';
 
@@ -149,7 +154,28 @@ async function ledger(args: Args): Promise<void> {
 async function fix(args: Args): Promise<void> {
   const colour = palette(colourEnabled(args.color));
   const built = await buildAll(args);
-  const plan = await planFixes(built.actions);
+  const actions = [...built.actions];
+  let nothingToRestore = false;
+  if (args.restoreDescriptions) {
+    // 🚨 The one edit that adds to every turn. It is built here, from the flag, and never inside
+    // the ledger's own action list, so no run that did not ask for it can write it.
+    const offer = built.listingBudget;
+    if (offer === null) nothingToRestore = true;
+    else {
+      actions.push({
+        kind: 'listing-budget',
+        fraction: offer.fraction,
+        adds: offer.addsTokens,
+        settingsPath: offer.settingsPath,
+        why:
+          `every skill description is sent again, for about ${offer.addsTokens.toLocaleString('en-US')} more ` +
+          'tokens on every turn' +
+          (offer.atLeast ? '. A dropped skill that is in no file could not be sized, so one may still go without.' : '.'),
+        saves: 0,
+      });
+    }
+  }
+  const plan = await planFixes(actions);
 
   if (args.json) {
     // 🔒 The plan without the file bodies. `before` and `after` are whole settings files, and a
@@ -175,6 +201,12 @@ async function fix(args: Args): Promise<void> {
   }
 
   process.stdout.write(`${renderPlan(plan, colour)}\n`);
+  if (nothingToRestore) {
+    process.stdout.write(
+      `  ${colour.dim('--restore-descriptions: no session here shows a skill losing its description to the')}\n` +
+        `  ${colour.dim('listing budget, so there is nothing to restore.')}\n\n`,
+    );
+  }
   if (plan.problems.length > 0) process.exitCode = 1;
   if (plan.edits.length === 0) return;
 
@@ -204,6 +236,62 @@ async function fix(args: Args): Promise<void> {
 
   const applied = await applyFixes(plan);
   process.stdout.write(`${renderApplied(applied, colour)}\n`);
+}
+
+/** `context-tax receipt`: the ledger again, cut for a screenshot. See `render/receipt.ts`. */
+async function receipt(args: Args): Promise<void> {
+  const built = await buildAll(args);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(built, null, 2)}\n`);
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  process.stdout.write(`${renderReceipt(built, palette(colourEnabled(args.color)), today)}\n`);
+}
+
+/**
+ * `context-tax session [id]`: one session, turn by turn.
+ *
+ * Reads the config and the history but starts no server: the picture needs the transcript and the
+ * prefix total, and neither comes from a probe.
+ */
+async function session(args: Args): Promise<void> {
+  const spinner = progress();
+  spinner.set('reading your session history');
+  let scanned;
+  try {
+    scanned = await scanEvidence({ cwd: resolvePath(args.cwd ?? process.cwd()) });
+  } finally {
+    spinner.done();
+  }
+  const candidates = scanned.sessions.filter((one) => one.kind === 'session');
+  const wanted = args.sessionId;
+  const chosen =
+    wanted === undefined
+      ? [...candidates].sort((a, b) => b.turns - a.turns)[0]
+      : candidates.find((one) => one.sessionId.startsWith(wanted));
+  if (chosen === undefined) {
+    process.stderr.write(
+      wanted === undefined
+        ? '\n  no session history for this directory yet, so there is nothing to draw.\n\n'
+        : `\n  no session here has an id starting ${JSON.stringify(wanted)}.\n\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const series = await readSessionSeries(chosen.file);
+  const view = { series, openedAt: chosen.coldStartTokens };
+
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify({ sessionId: chosen.sessionId, ...series }, null, 2)}\n`);
+    return;
+  }
+  if (args.svg !== undefined) {
+    await writeFile(resolvePath(args.svg), renderSessionSvg(view), 'utf8');
+    process.stdout.write(`\n  wrote ${args.svg}\n`);
+  }
+  process.stdout.write(`${renderSession(view, palette(colourEnabled(args.color)))}\n`);
 }
 
 async function measure(args: Args): Promise<void> {
@@ -240,7 +328,17 @@ async function evidence(args: Args): Promise<void> {
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 
   if (args.json) {
-    process.stdout.write(`${JSON.stringify(scanned, null, 2)}\n`);
+    // One line per listed skill per session is most of the output and none of the point of it.
+    // The counts stay; see `SentSkillListing.skills`.
+    const slim = {
+      ...scanned,
+      sessions: scanned.sessions.map((session) =>
+        session.record?.skillListing == null
+          ? session
+          : { ...session, record: { ...session.record, skillListing: { ...session.record.skillListing, skills: null } } },
+      ),
+    };
+    process.stdout.write(`${JSON.stringify(slim, null, 2)}\n`);
     return;
   }
 
@@ -351,6 +449,12 @@ if (args.command === 'help') {
       break;
     case 'fix':
       await fix(args);
+      break;
+    case 'receipt':
+      await receipt(args);
+      break;
+    case 'session':
+      await session(args);
       break;
     case 'config':
       await config(args);

@@ -17,6 +17,14 @@
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 
+import { parseMcpToolName } from './names.js';
+import {
+  ATTACHMENT_HINT,
+  finalizeRecord,
+  newRecordAccumulator,
+  recordAttachment,
+  wantsAttachment,
+} from './record.js';
 import type {
   ColdStart,
   Evidence,
@@ -26,6 +34,8 @@ import type {
   SkillUsage,
 } from './types.js';
 import { defaultProjectsDir, findTranscripts, type TranscriptKind } from './transcripts.js';
+
+export { parseMcpToolName } from './names.js';
 
 /**
  * Cheap substring gate applied before `JSON.parse`. Most lines in a transcript are neither an
@@ -61,15 +71,6 @@ function asString(value: unknown): string | null {
 function median(sorted: number[]): number {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
-
-/** `mcp__acme__acme_get_knowledge` → `{ server: 'acme', tool: 'acme_get_knowledge' }`. */
-export function parseMcpToolName(name: string): { server: string; tool: string } | null {
-  if (!name.startsWith('mcp__')) return null;
-  const rest = name.slice('mcp__'.length);
-  const split = rest.indexOf('__');
-  if (split <= 0 || split === rest.length - 2) return null;
-  return { server: rest.slice(0, split), tool: rest.slice(split + 2) };
 }
 
 /** Pulls every `<command-name>` out of a user message, whose content may be a string or blocks. */
@@ -154,14 +155,17 @@ async function scanFile(
       sessionId: slug,
       file: path,
       kind,
+      headless: false,
       cwd: null,
       turns: 0,
       sidechainTurns: 0,
       coldStartTokens: null,
       contextTokens: 0,
+      peakContextTokens: 0,
       outputTokens: 0,
       firstSeen: null,
       lastSeen: null,
+      record: null,
     },
     mcpServers: new Map(),
     builtinTools: new Map(),
@@ -170,6 +174,17 @@ async function scanFile(
     slashCommands: new Map(),
   };
   let malformed = 0;
+  // A subagent is sent a different prompt, and the rows this feeds describe the main loop's.
+  const sent = kind === 'session' ? newRecordAccumulator() : null;
+  /**
+   * 🚨 One API reply is written as several lines, one per content block, and **every one of them
+   * repeats the reply's `usage`**. Counting lines counted a reply that thought, spoke and called a
+   * tool as three turns carrying three times its context. Measured on a real corpus: 4,883 lines
+   * for 2,609 replies, so every turn count, every "context carried" and every per-call cost built
+   * on them was 1.9x too high. The tool calls are different on each line, so those are still read
+   * from all of them. Only the bill is taken once.
+   */
+  const billed = new Set<string>();
 
   const reader = createInterface({
     input: createReadStream(path, { encoding: 'utf8' }),
@@ -179,7 +194,12 @@ async function scanFile(
   for await (const line of reader) {
     const isAssistant = line.includes(ASSISTANT_HINT);
     const hasCommand = line.includes(COMMAND_HINT);
-    if (!isAssistant && !hasCommand) continue;
+    const isSent =
+      sent !== null &&
+      !isAssistant &&
+      line.includes(ATTACHMENT_HINT) &&
+      wantsAttachment(sent, line, acc.session.turns === 0);
+    if (!isAssistant && !hasCommand && !isSent) continue;
 
     let parsed: unknown;
     try {
@@ -195,10 +215,16 @@ async function scanFile(
     if (sessionId) acc.session.sessionId = sessionId;
     const cwd = asString(record.cwd);
     if (cwd && !acc.session.cwd) acc.session.cwd = cwd;
+    if (asString(record.entrypoint)?.startsWith('sdk') === true) acc.session.headless = true;
     const timestamp = asString(record.timestamp);
     if (timestamp) {
       if (!acc.session.firstSeen) acc.session.firstSeen = timestamp;
       acc.session.lastSeen = timestamp;
+    }
+
+    if (record.type === 'attachment') {
+      if (sent !== null && record.isSidechain !== true) recordAttachment(sent, record, acc.session.turns === 0);
+      continue;
     }
 
     const message = asRecord(record.message);
@@ -211,7 +237,10 @@ async function scanFile(
     if (record.type !== 'assistant' || !message) continue;
 
     const usage = asRecord(message.usage);
-    if (usage) {
+    const replyId = asString(message.id);
+    const alreadyBilled = replyId !== null && billed.has(replyId);
+    if (replyId !== null) billed.add(replyId);
+    if (usage && !alreadyBilled) {
       const cacheRead = asNumber(usage.cache_read_input_tokens);
       const total = asNumber(usage.input_tokens) + asNumber(usage.cache_creation_input_tokens) + cacheRead;
       if (total > 0) {
@@ -221,6 +250,8 @@ async function scanFile(
         // The FILE decides this, not a record field: `isSidechain` never appears as `true`
         // anywhere in a real corpus, because a subagent's turns live in their own transcript.
         if (kind === 'subagent' || record.isSidechain === true) acc.session.sidechainTurns += 1;
+        // A subagent runs its own model and its own window, so its turns prove nothing about this one.
+        else acc.session.peakContextTokens = Math.max(acc.session.peakContextTokens, total);
         // A request that read nothing from cache carried the whole prompt, so its total IS the
         // fixed prefix plus the first user message. Later turns cannot tell us that.
         if (cacheRead === 0 && acc.session.coldStartTokens === null) {
@@ -239,6 +270,7 @@ async function scanFile(
     }
   }
 
+  if (sent !== null) acc.session.record = finalizeRecord(sent);
   return { acc, malformed };
 }
 

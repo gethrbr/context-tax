@@ -64,14 +64,35 @@ export type Verdict =
   | { kind: 'broken'; reason: string }
   /** We chose not to start it, so there is no cost to report. Not a judgement of the server. */
   | { kind: 'not-measured'; reason: string }
+  /**
+   * Configured, and the session this screen was read from sent nothing for it. It costs nothing
+   * there, whatever a probe of it weighs, so it is never a finding and never a saving.
+   */
+  | { kind: 'not-sent'; reason: string }
   /** Real cost, no attributable usage. Memory files are read by the model, not called by it. */
   | { kind: 'not-attributable'; why: string };
 
-export type RowKind = 'mcp-server' | 'skills' | 'agents' | 'memory';
+/**
+ * `client` is what Claude Code sends on its own account: its system prompt, its tool schemas, the
+ * tool-name list and the session details. `hooks` is what your hooks add in front of the first turn.
+ * Both exist only when a session recorded them; without a record they are part of `unattributed`.
+ */
+export type RowKind = 'mcp-server' | 'skills' | 'agents' | 'memory' | 'hooks' | 'client';
+
+/** Which of the client's own blocks a `client` row is. */
+export type ClientPart = 'tools' | 'system-prompt' | 'tool-list' | 'session-details';
 
 export interface LedgerRow {
   label: string;
   kind: RowKind;
+  /**
+   * How many things the row stands for, when it stands for several: skills, agents, files, tools.
+   * The label says it in words for the screen. This is the same number for anything that is not
+   * the screen, so nothing has to read it back out of a sentence.
+   */
+  count?: number;
+  /** Set on `client` rows only. */
+  part?: ClientPart;
   /**
    * What this costs on **every turn**: for an MCP server, its resident half, because current
    * Claude Code defers tool schemas and loads them on demand. `null` only when the item could not
@@ -181,8 +202,46 @@ export interface MachineEvidence {
   compacts: number;
 }
 
+/**
+ * Where the rows came from.
+ *
+ * 🔑 `record` means they were read from what one of your sessions actually sent, and the day says
+ * which. `measured` means no session here recorded that, so they are weighed from your config the
+ * way the client is understood to pack it. The screen always says which of the two it is showing.
+ */
+export type LedgerSource =
+  | { kind: 'record'; day: string; client: string | null; asSent: boolean }
+  | { kind: 'measured' };
+
+/**
+ * The one edit that costs tokens instead of recovering them, so `fix` only makes it when asked.
+ *
+ * Raising the listing budget sends every skill description again. It is the answer when the skills
+ * that lost theirs are ones you want the model to reach for, and it is never applied by default.
+ */
+export interface ListingBudgetOffer {
+  fraction: number;
+  addsTokens: number;
+  /** A dropped skill could not be sized, so the fraction may still leave one description out. */
+  atLeast: boolean;
+  settingsPath: string;
+}
+
 export interface Ledger {
   cwd: string;
+  source: LedgerSource;
+  /**
+   * The context window, when a session proves it. `null` otherwise: a share of a guessed window is
+   * a number this tool printed once and had to take back.
+   */
+  windowTokens: number | null;
+  listingBudget: ListingBudgetOffer | null;
+  /**
+   * Skills the newest recorded session sent as a name with no description, of how many it listed.
+   * `null` when none were, and when no session recorded its listing. The first finding says the
+   * same thing in a sentence; this is the pair of numbers behind it, for the receipt and `--json`.
+   */
+  neverReceived: { dropped: number; listed: number } | null;
   /** Every finding's actions, merged. `--fix` reads this and nothing else. */
   actions: FixAction[];
   reconciliation: Reconciliation;

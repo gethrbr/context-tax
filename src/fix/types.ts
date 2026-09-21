@@ -22,7 +22,16 @@ import type { SkillOverride } from '../resolve/types.js';
 export type FileAction =
   | { kind: 'disable-mcpjson-server'; server: string }
   | { kind: 'disable-plugin'; plugin: string }
-  | { kind: 'skill-override'; skill: string; value: SkillOverride };
+  | { kind: 'skill-override'; skill: string; value: SkillOverride }
+  /**
+   * Raise `skillListingBudgetFraction` so every skill description is sent again.
+   *
+   * 🚨 The only action that **adds** to every turn, which is why it is never in the list `fix`
+   * runs by default and only exists when `--restore-descriptions` asks for it. `adds` is its price,
+   * printed beside it, because an edit that costs tokens inside a tool about saving them has to say
+   * so before anybody confirms it.
+   */
+  | { kind: 'listing-budget'; fraction: number; adds: number };
 
 /** A `FileAction` plus where it lands, why, and what it recovers. */
 export type SettingsAction = FileAction & {
@@ -68,6 +77,8 @@ export function actionKey(action: FixAction): string {
       return `plugin:${action.plugin}`;
     case 'skill-override':
       return `skill:${action.skill}`;
+    case 'listing-budget':
+      return 'listing-budget';
     case 'manual':
       return `manual:${action.command ?? action.why}`;
   }
@@ -94,6 +105,8 @@ export interface FixPlan {
   alreadyApplied: FixAction[];
   /** Tokens per turn the file edits would recover, when every one of them can be costed. */
   saves: number;
+  /** Tokens per turn the edits would add. Only a raised listing budget does that, and only on request. */
+  adds: number;
   /**
    * Files we refused to touch, and why.
    *

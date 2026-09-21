@@ -4,6 +4,182 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+**The rows are read, not modelled.** A recent Claude Code writes what it sent into the session
+transcript: the skill listing as it went out, the tool names, each instruction file, its own tools
+and system prompt. Until now this tool worked all of that out from your config and hoped the client
+agreed. It now reads the record, and keeps the model for machines that have none.
+
+Reading it turned up two things that are bigger than the feature. Every turn count this tool has
+ever printed was about double. And on a config with one large plugin, most skills reach the model as
+a name with nothing to choose them by, which no screen anywhere says.
+
+### Added
+
+- **Rows come from what a session sent.** Skills, agents, instruction files, MCP servers, your
+  hooks, and the client's own tools, system prompt, tool name list and session details are each
+  measured on the text the transcript recorded. A line under the table names the session they were
+  read from. With no such session the rows are weighed from your config as before, and the same
+  line says that. A server added after the recorded session began is weighed too, because that
+  session could not have sent it.
+
+- **`CLAUDE CODE ITSELF` is itemised.** The client's built-in tools and system prompt were the bulk
+  of `unattributed`. They are rows now, under a title that says whose they are, so the remainder is
+  the gap between characters and billed tokens rather than most of the screen.
+
+- **What your agent never received.** Past its budget the client sends a skill as a bare name. The
+  first finding counts those from the listing itself, groups them by who owns them, and prices the
+  two ways out: raise `skillListingBudgetFraction` and pay for every description, or switch skills
+  off and hand their room on. It is a count, not an estimate, and it says which session it is from
+  and that who loses out shifts with recent use.
+
+- **The window is worked out, not assumed.** The budget has to sit between the size of the listing
+  that was sent and what the smallest dropped description would have needed, and the window is that
+  budget divided by your fraction. The screen says *about*. A listing that fits proves nothing about
+  the window, so then no window is claimed.
+
+- **The first line says the share of the window**: *N tokens on every turn, P% of a window of about
+  W, before you type a word.* Only when a session proves the window. Otherwise there is no
+  percentage at all.
+
+- **`context-tax receipt`.** The same totals by kind, 46 columns wide, with no server, plugin,
+  skill or path on it, made to be screenshotted.
+
+- **`context-tax session`, and `--svg <file>`.** One session turn by turn: the climb, each
+  compaction, and the floor it never drops under, which is the prefix the main screen itemises. The
+  SVG is one self-contained file carrying numbers and nothing else.
+
+- **`context-tax fix --restore-descriptions`** sets `skillListingBudgetFraction` to what sends every
+  description. It is never part of a plain `fix`, because it is the one change here that makes every
+  turn cost more. It prints what it adds, and it never lowers a fraction you have already set higher.
+
+- **Connectors no file declares are rows.** A claude.ai account connector, or a server built into
+  the client, is in the record and in no config. It is listed with its calls, judged on the machine's
+  history, and its finding says where it is switched off, since there is nothing here to edit.
+  Connectors under 100 tokens are grouped into one row.
+
+- On the library export: `record` and `headless` on each session in `evidence`; `source`,
+  `windowTokens`, `listingBudget` and `neverReceived` on the ledger; `count` and `part` on a row; a
+  `not-sent` verdict; `readSessionSeries`, `summarize`, `downsample`, `renderReceipt`,
+  `renderSession`, `renderSessionSvg`, `sessionCaption`, `parseSkillListing`, `transcriptKeysFor`
+  and `toolPrefixName`.
+
+### Fixed
+
+- 🚨 **One reply is counted once.** Claude Code writes a single API reply as several transcript
+  lines, one per content block, and every line repeats the reply's `usage`. The scan counted lines.
+  A reply with a thought, a sentence and a tool call is three lines, so turns, *tokens of context
+  carried*, and every *per call* and *standing cost per use* figure ran at about twice the truth.
+  Usage is now taken once per reply id. `tool_use` blocks are still read from every line, so call
+  counts do not move. **Every one of those figures drops on upgrade, and the new ones are right.**
+
+- 🚨 **A plugin's server is no longer reported as never called.** The client keys its tools
+  `mcp__plugin_<plugin>_<server>__`, and the join looked for `mcp__<server>__`, found nothing, and
+  said *0 calls* about a server in daily use. A name with a space or a dot in it missed the same
+  way, because the client replaces those characters in the tool prefix. Calls are now summed over
+  every key a server can appear under.
+
+- **A server that could not connect is not charged.** It sent nothing, so its row is `0` and says
+  *could not connect*, with what it weighs when it does start. It gets no finding: there is nothing
+  to recover from a server that costs nothing.
+
+- **A server's per-turn cost is what a deferring client sends**: its tool names and its
+  instructions. The weighed figure also counted every tool description, which the client no longer
+  puts in the prompt, so server rows ran high.
+
+- **A server declared in two places and loaded under two names is one row**, carrying both copies.
+
+- **`claude -p` and SDK runs are not read as your session.** They load a different prefix, so an
+  interactive session is preferred for the total and for the record, and a headless one is used only
+  when there is nothing else.
+
+- **`config` and `measure` say which screen to believe.** Both work from files and assume a
+  200,000-token window for the listing cap. They now say so, and point at the main screen, which
+  reads what was sent.
+
+The rest of this list is the model, which is now the fallback for a machine with no recorded
+session. It was the first thing found in this release: **a skill was costed as what is on disk, and
+the client does not send what is on disk.**
+
+- **The skills row is what the listing costs as Claude Code packs it.** Every skill's `name` and
+  `description` was summed, whole, with no cap. The client cuts one description at 1,536 characters
+  and caps the entire listing at 1% of the context window: 8,000 characters on a 200,000-token window,
+  40,000 on a million.
+  Past that every skill keeps its name and descriptions compete for what is left. Sixty skills of
+  1,000 characters each were reported as 60,000 characters on every turn where the model is sent
+  8,000, and a config carrying one large plugin is that shape. The packing is reproduced step for
+  step in `measure/skill-listing.ts`, and an on/off run of a plugin against billed `usage` is how
+  it was checked.
+
+- **A saving is the listing before minus the listing after, never a sum of lines.** Past the budget
+  the client hands freed room to another description, so switching off three skills out of sixty
+  recovers close to nothing, and the old sum promised all three. Findings are charged in order
+  against one shrinking listing, so they add up, and the finding says when the listing is over its
+  budget, first in its detail where the four-line clamp cannot cut it.
+
+- **The headline, the findings and the `fix` plan say the same number.** Only a skill with a lever
+  leaves the listing: a plugin skill in a plugin you use has no switch, so it is no longer counted
+  as recoverable. Before this the front screen could promise several times what `fix` went on to
+  write. A joint saving is split across its actions by weight in whole tokens that sum exactly.
+
+- **A skill the model is never told about costs nothing.** `skillOverrides` of `off` and
+  `user-invocable-only`, and `disable-model-invocation: true` in the frontmatter, were all still
+  counted and still recommended for switching off, including on the run after `fix` had done it.
+  `name-only` is costed as its name. An override on a plugin skill is ignored, as the client
+  ignores it.
+
+- **`when_to_use` is part of the line**, joined to the description the way the client joins it, and
+  a plugin skill is costed under its `plugin:name`, which is how it is listed.
+
+- **A plugin you use is handed back once, not once per skill.** It has no per-skill switch, and
+  that is one fact about the plugin. It was printed once for each unused skill, so a plugin with a
+  hundred of them put a hundred copies of one sentence in the `fix` plan, with the edits `fix` does
+  make somewhere underneath. The note now carries the count, and it is one line per plugin however
+  many findings reach it.
+
+- **The `fix:` line under a skills finding is routed the way its actions are.** It told you to set
+  every skill to `off` in `skillOverrides`, including plugin skills, where that entry does nothing.
+  A plugin skill you type was pointed at `enabledPlugins`, which would have taken the slash command
+  away: typing it is what makes the plugin one you use. The line is now built from the kinds of
+  skill actually in the finding.
+
+- **`config` prints what the listing sends.** It summed the characters on disk, the number the
+  ledger had stopped believing, one command away from it, and counted a skill as "listed to the
+  model" on the same line that called it hidden.
+
+- 🚨 **A server this tool cannot start is only called broken when your sessions agree.** A remote
+  server behind a login answers the client, which holds the token, and answers this tool with a
+  401. It was reported as `cannot start, so it gives your sessions nothing`, beside a calls column
+  that said otherwise. The transcripts are the exact half of the evidence, so a server with calls
+  on record is now `not measured`, with the reason, and only one with none is broken.
+
+- **Nothing is said about a server that costs nothing.** One that exposes no tools weighs zero and
+  cannot be called, and it was still given a finding: `costs 0 tokens every turn and has never
+  been called`.
+
+- The window the modelled budget is a share of is a guess from how large your turns have run: a turn
+  that carried more than 200,000 tokens was not inside a 200,000-token window. That proves the
+  window was larger and not how large, so a row built on it says it is modelled, and no percentage
+  is printed from it.
+- `skillListingBudgetFraction`, `skillListingMaxDescChars` and `SLASH_COMMAND_TOOL_CHAR_BUDGET`
+  are read from the settings chain and the environment. One named key is read out of a settings
+  `env` block and nothing else in it.
+- `peakContextTokens` on each session in `evidence`, and the packing functions on the library
+  export.
+
+### What it still cannot see
+
+The record exists only in transcripts written by a recent client. On an older one every row falls
+back to the model and says so. There, Claude Code's own bundled skills sit in the same budget and
+appear in no file, so the modelled skills row is a **ceiling**.
+
+With a record the bundled skills are in the listing that is read, so the row is what was sent. What
+is still not claimed is which skill loses its description next time. The client fills the room in
+order of recent use, so the finding names who lost out in the session it read, and says that shifts.
+
+A hook that adds context on every prompt is counted once, as what it put in front of the first turn.
+
 ## 0.3.1
 
 No behaviour change, and one reason to cut it: `0.3.0` shipped two figures measured on a real

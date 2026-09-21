@@ -26,6 +26,12 @@ export interface Args {
   timeoutMs: number;
   dryRun: boolean;
   yes: boolean;
+  /** `fix`: also raise the skill listing budget. Costs tokens, so it is never the default. */
+  restoreDescriptions: boolean;
+  /** `session`: write the picture to this file as an SVG. */
+  svg?: string;
+  /** `session <id>`: which one, by the start of its id. The longest session here when left out. */
+  sessionId?: string;
   /**
    * Everything wrong with the command line, collected rather than thrown so a single run reports
    * all of it. Non-empty means nothing should execute.
@@ -54,12 +60,16 @@ export const KNOWN_FLAGS = [
   '--dry-run',
   '--yes',
   '-y',
+  '--restore-descriptions',
+  '--svg',
 ] as const;
 
 export const HELP = `
   context-tax: what your coding agent's context costs you every turn.
 
     context-tax             what your context costs, and whether you used it
+    context-tax receipt     the same total as an itemised receipt, safe to share
+    context-tax session     one session's context turn by turn, compactions marked
     context-tax fix         execute the findings, showing every changed line
     context-tax config      what is loaded in this directory right now
     context-tax measure     what it weighs, per server, per skill, per file
@@ -77,6 +87,10 @@ export const HELP = `
     --timeout <s>   per server, default 10
     --dry-run       fix: show the diff and stop, without asking to write
     --yes, -y       fix: skip the confirmation, required when stdin is not a tty
+    --restore-descriptions
+                    fix: also raise the skill listing budget so every skill
+                    description is sent. It costs tokens, so it is never the default
+    --svg <file>    session: write the picture as an image you can post
 
   No telemetry, no model call, and no context-tax server for anything to be sent
   to. The measure command performs the same tools/list handshake your agent
@@ -115,6 +129,7 @@ export function parseArgs(argv: string[]): Args {
     timeoutMs: 10_000,
     dryRun: false,
     yes: false,
+    restoreDescriptions: false,
     usageErrors,
   };
   const positional: string[] = [];
@@ -165,6 +180,16 @@ export function parseArgs(argv: string[]): Args {
       case '-y':
         args.yes = true;
         break;
+      case '--restore-descriptions':
+        args.restoreDescriptions = true;
+        break;
+      case '--svg': {
+        const raw = valueAfter(i, arg);
+        if (raw === undefined) break;
+        i += 1;
+        args.svg = raw;
+        break;
+      }
       case '--cwd': {
         const raw = valueAfter(i, arg);
         if (raw === undefined) break;
@@ -192,6 +217,8 @@ export function parseArgs(argv: string[]): Args {
   }
 
   if (positional.length > 0) args.command = positional[0];
+  // `session` is the one command that takes an argument of its own: which session.
+  if (args.command === 'session' && positional.length === 2) args.sessionId = positional.splice(1, 1)[0];
   // Running the first one and dropping the rest is how `context-tax measure fix` quietly becomes a
   // measurement, when the user plainly meant two different things.
   if (positional.length > 1) {

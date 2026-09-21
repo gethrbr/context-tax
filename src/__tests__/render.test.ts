@@ -33,6 +33,10 @@ const JSON_ERROR =
 function ledgerFixture(): Ledger {
   return {
     cwd: '/Users/somebody/a/deeply/nested/checkout/of/a/repository/with/a/long/name',
+    source: { kind: 'measured' },
+    windowTokens: null,
+    listingBudget: null,
+    neverReceived: null,
     actions: [],
     judged: true,
     machine: { sessions: 128, turns: 41_808, contextTokens: 8_912_004_331, clears: 172, compacts: 22 },
@@ -114,6 +118,7 @@ function measureFixture(): { config: ResolvedConfig; measure: MeasureResult } {
     sources: [],
     mcpServers: [],
     skills: [],
+    skillListing: { budgetFraction: null, maxDescChars: null, envBudgetChars: null },
     agents: [],
     commands: [],
     memory: [],

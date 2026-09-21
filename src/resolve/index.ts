@@ -89,6 +89,7 @@ export async function resolveConfig(options: ResolveOptions = {}): Promise<Resol
       sources: [...settingsSources, ...mcp.sources],
       mcpServers: mcp.servers,
       skills,
+      skillListing: settings.skillListing,
       agents,
       commands,
       memory,
@@ -120,5 +121,6 @@ export type {
   ResolvedMcpServer,
   ResolvedPlugin,
   ResolvedSkill,
+  SkillListingSettings,
   SkillOverride,
 } from './types.js';

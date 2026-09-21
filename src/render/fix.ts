@@ -26,6 +26,8 @@ function actionLine(action: SettingsAction): string {
       return `switch off the ${action.plugin} plugin`;
     case 'skill-override':
       return `set the ${action.skill} skill to ${action.value}`;
+    case 'listing-budget':
+      return `raise the skill listing budget to ${action.fraction} of the window`;
   }
 }
 
@@ -143,6 +145,16 @@ export function renderPlan(plan: FixPlan, colour: Palette, width = screenWidth()
     line();
     line(
       `  ${colour.bold(`${n(plan.saves)} tokens per turn`)} ${colour.dim('recovered by the changes above.')}`,
+    );
+  }
+  if (plan.adds > 0) {
+    line();
+    line(
+      // Short enough to stay on one line at 80 columns: the screen above it is a diff, and a
+      // sentence that wraps under a diff reads as part of it.
+      `  ${colour.bold(`${n(plan.adds)} tokens per turn`)} ${colour.dim(
+        'added: the cost of sending every description.',
+      )}`,
     );
   }
 

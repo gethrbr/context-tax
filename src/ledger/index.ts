@@ -15,9 +15,20 @@
  *     it, that is said out loud instead of being absorbed.
  */
 
-import type { Evidence, ProjectEvidence, SessionEvidence } from '../evidence/types.js';
+import { transcriptKeysFor } from '../evidence/names.js';
+import type { Evidence, ProjectEvidence, SentServer, SessionEvidence } from '../evidence/types.js';
 import { actionKey } from '../fix/types.js';
 import type { FixAction } from '../fix/types.js';
+import {
+  apportion,
+  inferContextWindow,
+  lineChars,
+  packSkillListing,
+  savedBy,
+  skillKey,
+  skillListingBudgetChars,
+  toListedSkills,
+} from '../measure/skill-listing.js';
 import { tokens as toTokens } from '../measure/tokens.js';
 import type { MeasureResult, MeasuredMcpServer } from '../measure/types.js';
 import type {
@@ -28,11 +39,14 @@ import type {
   SkillOverride,
 } from '../resolve/types.js';
 import { serverReach, skillReach } from './reach.js';
+import { fractionToSendAll, ownerOf, pickRecord, readSentListing } from './sent.js';
 import type {
+  ClientPart,
   EvidenceScope,
   Finding,
   Ledger,
   LedgerRow,
+  ListingBudgetOffer,
   MachineEvidence,
   Verdict,
 } from './types.js';
@@ -66,6 +80,9 @@ const DEFAULT_MIN_SESSIONS = 5;
  * sessions, whose schema is re-sent on all of them.
  */
 const RARELY_CALLED = 0.1;
+
+/** Below this, a server this tool cannot edit is not worth a row of its own. */
+const SMALL_SERVER = 100;
 
 /**
  * `1 memory files` was on the screen of every run in a directory with one CLAUDE.md.
@@ -132,6 +149,30 @@ function callsFor(counts: Map<string, number>, name: string, plugin: string | nu
   const bare = counts.get(name) ?? 0;
   if (plugin === null) return bare;
   return bare + (counts.get(`${plugin.split('@')[0]}:${name}`) ?? 0);
+}
+
+/**
+ * Calls recorded for a server, under every name a transcript can give it.
+ *
+ * 🚨 A plugin's server is declared `acme` and its tools are recorded `mcp__plugin_acme_acme__*`, and
+ * a server declared `my.server` is recorded `my_server`. Looking up the declared name alone found
+ * nothing for either, which reads as a server nobody calls, and an unused plugin server is one of
+ * the things that lets the whole plugin be switched off.
+ */
+function serverCalls(counts: Map<string, number>, name: string, plugin: string | null): number {
+  return transcriptKeysFor(name, plugin).reduce((sum, key) => sum + (counts.get(key) ?? 0), 0);
+}
+
+function serverToolCalls(
+  counts: Map<string, Map<string, number>>,
+  name: string,
+  plugin: string | null,
+): Map<string, number> {
+  const merged = new Map<string, number>();
+  for (const key of transcriptKeysFor(name, plugin)) {
+    for (const [tool, calls] of counts.get(key) ?? []) merged.set(tool, (merged.get(tool) ?? 0) + calls);
+  }
+  return merged;
 }
 
 /**
@@ -283,9 +324,21 @@ function serverVerdict(
   scope: EvidenceScope,
 ): Verdict {
   if (measured.status.kind === 'unmeasured') {
-    return measured.status.cause === 'failed'
-      ? { kind: 'broken', reason: measured.status.reason }
-      : { kind: 'not-measured', reason: measured.status.reason };
+    if (measured.status.cause !== 'failed') return { kind: 'not-measured', reason: measured.status.reason };
+    // 🚨 `failed` means *this tool* could not start it, and that is only a verdict about your
+    // sessions when they agree. A remote server behind a login is the common case: the client holds
+    // the token, this tool does not, the probe gets a 401, and the transcripts show the server
+    // answering calls all week. Calling that one broken is the tool's failure printed as yours.
+    if (calls > 0) {
+      return {
+        kind: 'not-measured',
+        reason:
+          `this tool could not start it (${measured.status.reason.replace(/\.$/, '')}), and your sessions ` +
+          `can: it has answered ${plural(calls, 'call')}. The usual cause is a login the client holds ` +
+          'and this tool does not',
+      };
+    }
+    return { kind: 'broken', reason: measured.status.reason };
   }
   if (sessionsSince === null) {
     // 🔑 The honest branch, and it covers most servers on most machines: `~/.claude.json` is not
@@ -413,13 +466,29 @@ export function buildLedger(
     .sort((a, b) => (b.firstSeen ?? '').localeCompare(a.firstSeen ?? ''));
   const sessions = allSessions.filter((session) => under(session.cwd, root));
 
-  const recent = sessions.filter((session) => session.coldStartTokens !== null).slice(0, windowSize);
+  // A session a script started is billed like any other and is counted in every denominator, but
+  // it is often run under settings nobody works with, so it does not get to say what a turn costs
+  // here while a session a person started can.
+  const started = sessions.some((session) => !session.headless)
+    ? sessions.filter((session) => !session.headless)
+    : sessions;
+  const recent = started.filter((session) => session.coldStartTokens !== null).slice(0, windowSize);
   const total = median(recent.map((session) => session.coldStartTokens ?? 0));
   const windowLabel =
     recent.length === 0
       ? 'no session here recorded a cold start'
       : `${recent.length} most recent session${recent.length === 1 ? '' : 's'}, ` +
         `${(recent[recent.length - 1].firstSeen ?? '').slice(0, 10)} to ${(recent[0].firstSeen ?? '').slice(0, 10)}`;
+
+  /**
+   * 🔑 What one of those sessions actually sent. When there is one, every row it covers is read
+   * from it and not modelled; see `evidence/record.ts`. The window's own sessions come first, so
+   * the rows and the exact total describe the same stretch of history.
+   */
+  const picked = pickRecord(recent) ?? pickRecord(sessions);
+  const record = picked?.record ?? null;
+  const knowsServers = record !== null && (record.toolList !== null || Object.keys(record.servers).length > 0);
+  const claimedKeys = new Set<string>();
 
   const here = aggregate(evidence.projects.filter((project) => under(project.cwd, root)));
   const everywhere = aggregate(evidence.projects);
@@ -505,7 +574,7 @@ export function buildLedger(
     // to be enough to rule it out. Scoping it to this tree would switch off a plugin that is
     // working in another repo, and the tool would report success while doing it.
     const usedServer = config.mcpServers.some(
-      (server) => server.plugin === id && (everywhere.calls.get(server.name) ?? 0) > 0,
+      (server) => server.plugin === id && serverCalls(everywhere.calls, server.name, id) > 0,
     );
     const usedSkill = config.skills.some(
       (skill) =>
@@ -535,7 +604,7 @@ export function buildLedger(
     const scope = serverScope(declared);
     const usage = scope === 'machine' ? everywhere : here;
     const scoped = scope === 'machine' ? allSessions : sessions;
-    const used = usage.calls.get(measured.name) ?? 0;
+    const used = serverCalls(usage.calls, measured.name, declared.plugin);
     // Scoped to the same window the verdict uses. A server added last week must not be charged for
     // turns taken before it existed.
     const inWindow = startedSince(scoped, declared.configuredSince) ?? scoped;
@@ -543,9 +612,54 @@ export function buildLedger(
     // 🔑 Every per-turn number below is the **resident** one. The client defers tool schemas, so
     // charging a server's whole serialized weight to every turn would overstate acme by 3.2x.
     // `measured.tokens` is still the right number for what a load costs, and it rides along.
-    const perTurn = measured.residentTokens;
+    //
+    // 🔑 And when a session recorded what it sent, that is the number, not the probe. A client that
+    // defers sends a tool's **name** and nothing else until something loads it, so a probe that
+    // charges name plus description runs high; and a server the client could not connect sent
+    // nothing at all, whatever it weighs when this tool starts it.
+    for (const key of transcriptKeysFor(measured.name, declared.plugin)) claimedKeys.add(key);
+    // Summed, not the first hit: a server declared twice can be loaded twice, once under each name,
+    // and both copies are in the prompt whichever declaration this tool says wins.
+    const sentCopies = transcriptKeysFor(measured.name, declared.plugin).flatMap((key) => {
+      const copy = record?.servers[key];
+      return copy === undefined ? [] : [copy];
+    });
+    const sentServer: SentServer | null =
+      sentCopies.length === 0
+        ? null
+        : sentCopies.reduce((sum, copy) => ({
+            tools: sum.tools + copy.tools,
+            nameChars: sum.nameChars + copy.nameChars,
+            instructionChars: sum.instructionChars + copy.instructionChars,
+            schemaChars: sum.schemaChars + copy.schemaChars,
+          }));
+    // Added after the session the record is from: that session could not have sent it.
+    const newerThanRecord =
+      picked !== null &&
+      declared.configuredSince.known &&
+      declared.configuredSince.iso > (picked.session.firstSeen ?? '');
+    const notSent = knowsServers && sentServer === null && !newerThanRecord;
+    const perTurn =
+      sentServer !== null
+        ? toTokens(sentServer.nameChars + sentServer.instructionChars + sentServer.schemaChars)
+        : notSent
+          ? 0
+          : measured.residentTokens;
     const perCall = perTurn === null || used === 0 ? null : Math.round((perTurn * turns) / used);
-    const verdict = serverVerdict(
+    const verdict: Verdict = notSent
+      ? {
+          kind: 'not-sent',
+          reason:
+            // No pronoun: identical notes are merged, so this is printed against two servers as often
+            // as against one.
+            (record?.failedServers.some((name) => transcriptKeysFor(measured.name, declared.plugin).includes(name)) === true
+              ? `Claude Code could not connect in your session of ${picked?.day ?? ''}, so nothing was sent`
+              : `nothing was sent in your session of ${picked?.day ?? ''}, so not connected there`) +
+            (measured.residentTokens === null || measured.residentTokens === 0
+              ? ''
+              : `. Started here: ${measured.residentTokens.toLocaleString('en-US')} tokens`),
+        }
+      : serverVerdict(
       measured,
       used,
       perCall,
@@ -559,7 +673,9 @@ export function buildLedger(
       label: measured.name,
       kind: 'mcp-server',
       tokens: perTurn,
-      loadedTokens: measured.tokens,
+      // Never below what is already resident: a server whose schemas the client loaded up front
+      // has nothing waiting behind it.
+      loadedTokens: measured.tokens === null || perTurn === null ? measured.tokens : Math.max(measured.tokens, perTurn),
       share: share(perTurn),
       /**
        * 🔑 A dash, not a zero, when there is no history in scope at all.
@@ -595,7 +711,10 @@ export function buildLedger(
         ? ''
         : ` Loading its schemas costs ${(measured.tokens - perTurn).toLocaleString('en-US')} tokens more,` +
           ' every time something does.';
-    if (verdict.kind === 'rarely-called' && perTurn !== null) {
+    // 🚨 Nothing is said about a server that costs nothing. One that exposes no tools weighs zero
+    // and cannot be called at all, so *"costs 0 tokens every turn and has never been called"* is
+    // true, empty, and printed as a finding beside the ones that matter.
+    if (verdict.kind === 'rarely-called' && perTurn !== null && perTurn > 0) {
       findings.push({
         headline:
           `${measured.name} is loaded on every turn and used in ${verdict.calls} of ` +
@@ -620,7 +739,7 @@ export function buildLedger(
         ),
       });
     }
-    if (verdict.kind === 'never-called' && perTurn !== null) {
+    if (verdict.kind === 'never-called' && perTurn !== null && perTurn > 0) {
       findings.push({
         headline: `${measured.name} costs ${perTurn.toLocaleString('en-US')} tokens every turn and has never been called`,
         detail:
@@ -653,8 +772,8 @@ export function buildLedger(
     // reader cannot resolve, and they resolve it by disbelieving both numbers. Found against a
     // real renamed server, which is why the guard counts against the tool list rather than
     // asking for more than one tool.
-    const perTool = usage.toolCalls.get(measured.name);
-    const unusedTools = measured.tools.filter((tool) => (perTool?.get(tool.name) ?? 0) === 0);
+    const perTool = serverToolCalls(usage.toolCalls, measured.name, declared.plugin);
+    const unusedTools = measured.tools.filter((tool) => (perTool.get(tool.name) ?? 0) === 0);
     if (
       verdict.kind === 'earning-it' &&
       unusedTools.length > 0 &&
@@ -683,122 +802,452 @@ export function buildLedger(
     }
   }
 
+  /**
+   * Servers the session sent that no file on this machine declares.
+   *
+   * 🔑 Connectors attached to a claude.ai account, and the ones the client ships with, are real
+   * context in every session and are written down nowhere this tool reads. They used to be a
+   * paragraph under the table saying so. The record lists them with their tools, so they are rows.
+   * Account-wide by nature, so they are judged over the machine, and their age is never known.
+   */
+  if (record !== null) {
+    const small: { key: string; tokens: number; used: number }[] = [];
+    for (const [key, sentServer] of Object.entries(record.servers)) {
+      if (claimedKeys.has(key)) continue;
+      const tokens = toTokens(sentServer.nameChars + sentServer.instructionChars + sentServer.schemaChars);
+      const used = everywhere.calls.get(key) ?? 0;
+      // A connector that is waiting for a login sends one tool name. Four of those are four rows of
+      // twenty tokens each, which is a table about nothing, so they share a row.
+      if (tokens < SMALL_SERVER) {
+        small.push({ key, tokens, used });
+        continue;
+      }
+      const turns = turnsIn(allSessions);
+      const perCall = used === 0 ? null : Math.round((tokens * turns) / used);
+      const rarely =
+        used > 0 && allSessions.length >= minSessions && used / allSessions.length < RARELY_CALLED && perCall !== null;
+      const verdict: Verdict =
+        used === 0
+          ? {
+              kind: 'never-called-age-unknown',
+              sessions: allSessions.length,
+              why: 'no file on this machine declares it, so nothing says when it was connected',
+              scope: 'machine',
+            }
+          : rarely
+            ? { kind: 'rarely-called', calls: used, sessions: allSessions.length, perCall, window: 'on record', scope: 'machine' }
+            : { kind: 'earning-it', calls: used, sessions: allSessions.length, window: 'on record', scope: 'machine' };
+      const outsideFix =
+        'no file here declares it, so there is nothing for this tool to edit. /mcp in a session shows where it ' +
+        'is connected from, and a claude.ai connector is switched off in your claude.ai settings';
+      rows.push({
+        label: key,
+        kind: 'mcp-server',
+        tokens,
+        loadedTokens: null,
+        share: share(tokens),
+        calls: allSessions.length === 0 ? null : used,
+        perCall,
+        basis: null,
+        verdict,
+        fix: outsideFix,
+      });
+      if (verdict.kind === 'rarely-called' && tokens > 0) {
+        findings.push({
+          headline:
+            `${key} is sent on every turn and used in ${verdict.calls} of ${verdict.sessions} sessions on this machine`,
+          detail:
+            `${tokens.toLocaleString('en-US')} tokens of tool names and instructions across ` +
+            `${turns.toLocaleString('en-US')} turns for ${plural(verdict.calls, 'call')}. No file on this machine ` +
+            'declares it, so its age is unknown and the per-call figure is an upper bound.',
+          // Counted as recoverable the way a `claude mcp remove` is: real, and yours to do.
+          saves: tokens,
+          fix: outsideFix,
+          actions: [{ kind: 'manual', command: null, why: `${key} costs ${tokens.toLocaleString('en-US')} tokens every turn. ${outsideFix}.` }],
+        });
+      }
+    }
+    if (small.length > 0) {
+      const tokens = small.reduce((sum, server) => sum + server.tokens, 0);
+      rows.push({
+        label: `${small.length} small connector${small.length === 1 ? '' : 's'}`,
+        kind: 'mcp-server',
+        count: small.length,
+        tokens,
+        loadedTokens: null,
+        share: share(tokens),
+        calls: allSessions.length === 0 ? null : small.reduce((sum, server) => sum + server.used, 0),
+        perCall: null,
+        basis: null,
+        verdict: {
+          kind: 'not-attributable',
+          why: `${small.map((server) => server.key).join(', ')}: under ${SMALL_SERVER} tokens each, and in no file on this machine`,
+        },
+        fix: null,
+      });
+    }
+  }
+
   /* Skills, agents and memory are one row each; the per-item recommendation is a finding. */
 
   /**
-   * One skill, one recommendation, routed by where the skill came from.
+   * A finding's skills as actions, routed by where each skill came from.
    *
    * 🔑 `skillOverrides` has **no effect on a plugin skill**. Emitting one anyway would be the worst
    * kind of fix: it writes a file, reports success, and changes nothing. A plugin skill is therefore
    * either folded into a whole-plugin switch — only when nothing that plugin provides has been used
    * — or handed back with the reason there is no lever.
+   *
+   * 🚨 Handed back **once per plugin**, never once per skill. A plugin with a hundred unused skills
+   * used to produce a hundred copies of one sentence, and the few edits `fix` does make were
+   * somewhere underneath them. `stuck` is the count across every skills finding, so the sentence is
+   * identical wherever it is emitted and `mergeActions` folds the copies into one line.
    */
-  const skillAction = (skill: ResolvedSkill, value: SkillOverride, why: string): FixAction | null => {
-    if (skill.plugin === null) {
-      return {
-        kind: 'skill-override',
-        skill: skill.name,
-        value,
-        settingsPath: config.settingsTarget,
-        why,
-        saves: toTokens(skill.listingChars),
-      };
+  const skillActions = (
+    skills: ResolvedSkill[],
+    value: SkillOverride,
+    whyFor: (skill: ResolvedSkill) => string,
+    savings: Map<string, number>,
+    stuck: Map<string, number>,
+  ): FixAction[] => {
+    const actions: FixAction[] = [];
+    const handedBack = new Set<string>();
+    for (const skill of skills) {
+      const saves = savings.get(skillKey(skill)) ?? 0;
+      if (skill.plugin === null) {
+        actions.push({
+          kind: 'skill-override',
+          skill: skill.name,
+          value,
+          settingsPath: config.settingsTarget,
+          why: whyFor(skill),
+          saves,
+        });
+        continue;
+      }
+      if (pluginIsIdle(skill.plugin)) {
+        actions.push({
+          kind: 'disable-plugin',
+          plugin: skill.plugin,
+          // This project's settings file, for the reason spelled out on the `enabledPlugins` lever
+          // in `resolve/mcp.ts`: the evidence is repo-scoped, so the edit has to be. Project scope
+          // works — this repo's own `.claude/settings.json` already carries an `enabledPlugins` block.
+          settingsPath: config.settingsTarget,
+          why: `nothing the ${skill.plugin} plugin provides has been used anywhere on this machine`,
+          saves,
+        });
+        continue;
+      }
+      if (handedBack.has(skill.plugin)) continue;
+      handedBack.add(skill.plugin);
+      const count = stuck.get(skill.plugin) ?? 1;
+      actions.push({
+        kind: 'manual',
+        command: null,
+        why:
+          `${plural(count, 'skill')} the model has never chosen ${count === 1 ? 'comes' : 'come'} from the ` +
+          `${skill.plugin} plugin, and skillOverrides does not apply to plugin skills. The only ` +
+          'switch is the whole plugin, which you do use.',
+      });
     }
-    if (pluginIsIdle(skill.plugin)) {
-      return {
-        kind: 'disable-plugin',
-        plugin: skill.plugin,
-        // This project's settings file, for the reason spelled out on the `enabledPlugins` lever
-        // in `resolve/mcp.ts`: the evidence is repo-scoped, so the edit has to be. Project scope
-        // works — this repo's own `.claude/settings.json` already carries an `enabledPlugins` block.
-        settingsPath: config.settingsTarget,
-        why: `nothing the ${skill.plugin} plugin provides has been used anywhere on this machine`,
-        saves: toTokens(skill.listingChars),
-      };
+    return actions;
+  };
+
+  /**
+   * The `fix:` line under a skills finding, routed the same way the actions are.
+   *
+   * One finding can hold three kinds of skill and each takes a different lever, so the sentence is
+   * built from the kinds actually present. Telling the reader to set a plugin skill in
+   * `skillOverrides` is advice that silently does nothing, which is the one thing this line exists
+   * to not say.
+   */
+  const skillFixLine = (skills: ResolvedSkill[], ownOnly: string, ownAmongOthers: string): string => {
+    const idlePlugins = [
+      ...new Set(
+        skills.flatMap((skill) => (skill.plugin !== null && pluginIsIdle(skill.plugin) ? [skill.plugin] : [])),
+      ),
+    ];
+    const stuck = skills.some((skill) => skill.plugin !== null && !pluginIsIdle(skill.plugin));
+    if (idlePlugins.length === 0 && !stuck) return ownOnly;
+    const parts: string[] = [];
+    if (skills.some((skill) => skill.plugin === null)) parts.push(ownAmongOthers);
+    if (idlePlugins.length > 0) {
+      parts.push(`set ${idlePlugins.map((id) => `"${id}": false`).join(', ')} in enabledPlugins`);
     }
-    return {
-      kind: 'manual',
-      command: null,
-      why:
-        `${skill.name} comes from the ${skill.plugin} plugin, and skillOverrides does not apply to ` +
-        'plugin skills. The only switch is the whole plugin, which you do use.',
-    };
+    if (stuck) {
+      parts.push(
+        parts.length > 0
+          ? 'the ones from a plugin you use have no switch of their own'
+          : 'none. skillOverrides does not apply to plugin skills, and the only switch is a whole plugin you use',
+      );
+    }
+    return parts.join('; ');
   };
 
   const visibleSkills = config.skills.filter((skill) => skill.shadowedBy === null);
+
+  /**
+   * 🚨 The skills row is what the listing costs as the client packs it, not the descriptions on
+   * disk. See `measure/skill-listing.ts` for the packing and for why the old sum was several times
+   * too large on any config carrying a big plugin.
+   *
+   * The window comes from the same recent sessions the exact total does, because both have to
+   * describe the config and the model you run now.
+   */
+  const listedSkills = toListedSkills(config.skills, config.skillListing);
+  const listedByKey = new Map(listedSkills.map((skill) => [skill.key, skill]));
+  const windowEvidence = recent.length > 0 ? recent : allSessions.slice(0, windowSize);
+  /**
+   * 🔑 The record first. A session that recorded its listing says what was sent, how many skills
+   * lost their description, and by arithmetic what budget took them. The packing model below is
+   * what is left when no session here recorded one, and its window is then a guess that says so.
+   */
+  const sentListing = record === null ? null : readSentListing(record, listedSkills, config.skillListing);
+  const contextWindow = inferContextWindow(windowEvidence.map((session) => session.peakContextTokens));
+  const listingBudget =
+    sentListing === null ? skillListingBudgetChars(config.skillListing, contextWindow) : sentListing.budget.chars;
+  const listingPopulation = sentListing === null ? listedSkills : sentListing.population;
+  const packed = packSkillListing(listingPopulation, listingBudget);
+  const skillTokens = sentListing === null ? toTokens(packed.chars) : sentListing.tokens;
+  const aboutBudget = (chars: number): string => `about ${chars.toLocaleString('en-US')} characters`;
+  const sentListingNote = (): string => {
+    if (sentListing === null) return '';
+    const day = picked?.day ?? '';
+    const since =
+      sentListing.hiddenSince === 0
+        ? ''
+        : `. ${plural(sentListing.hiddenSince, 'skill')} listed there ${sentListing.hiddenSince === 1 ? 'is' : 'are'} switched off now, so your next session sends less`;
+    if (sentListing.dropped.length === 0) {
+      return `as sent in your session of ${day}, every description included${since}`;
+    }
+    const { budget } = sentListing;
+    const cap =
+      budget.basis === 'env'
+        ? `${budget.chars.toLocaleString('en-US')} characters, set by SLASH_COMMAND_TOOL_CHAR_BUDGET`
+        : `${aboutBudget(budget.chars)}` +
+          (budget.windowTokens === null
+            ? ''
+            : `, its share of a window of about ${budget.windowTokens.toLocaleString('en-US')} tokens`);
+    return (
+      `as sent in your session of ${day}: ${plural(sentListing.dropped.length, 'skill')} went as a name with no ` +
+      `description, because Claude Code caps this listing at ${cap}${since}`
+    );
+  };
+
   rows.push({
-    label: plural(visibleSkills.length, 'skill'),
+    label: plural(sentListing === null ? packed.listed : sentListing.entries, 'skill'),
     kind: 'skills',
-    tokens: measure.skills.tokens,
+    count: sentListing === null ? packed.listed : sentListing.entries,
+    tokens: skillTokens,
     // No second half: the frontmatter is resident and the body is not counted anywhere.
     loadedTokens: null,
-    share: share(measure.skills.tokens),
+    share: share(skillTokens),
     calls: visibleSkills.reduce((sum, skill) => sum + skillCalls(skill).model, 0),
     perCall: null,
     basis: null,
     verdict: {
       kind: 'not-attributable',
-      why: 'a skill listing is one line each; the useful unit is the skill, below',
+      why: sentListing !== null
+        ? sentListingNote()
+        : packed.overBudget
+        ? `modelled, because no session here recorded its listing. Claude Code caps it at ${packed.budgetChars.toLocaleString('en-US')} characters ` +
+          `(${config.skillListing.envBudgetChars !== null ? 'set by SLASH_COMMAND_TOOL_CHAR_BUDGET' : `its share of a ${contextWindow.toLocaleString('en-US')}-token window, which is a guess from how large your turns have run`}) ` +
+          `and these descriptions run to ${packed.uncappedChars.toLocaleString('en-US')}, so ` +
+          `about ${plural(packed.demoted, 'skill')} ${packed.demoted === 1 ? 'is' : 'are'} listed by name alone. ` +
+          'This is a ceiling: the client\'s own bundled skills take room first and appear in no file'
+        : 'a skill listing is one line each; the useful unit is the skill, below',
     },
     fix: null,
   });
 
-  const judgeableSkills = visibleSkills.filter(skillJudgeable);
+  /**
+   * What the agent never received.
+   *
+   * 🔑 The finding people feel. "Tokens per turn" is a unit nobody notices; "Claude ignores the
+   * skill I wrote" is a thing they have said out loud, and this is very often why: past the budget
+   * the client keeps every name and drops descriptions, and a name alone gives the model nothing to
+   * choose a skill by. It is first on the screen because it is about the agent working, and every
+   * finding under it is about the bill.
+   *
+   * Read, never modelled. The client decides which descriptions survive by recent use, which no
+   * file records, so without a session that recorded its listing this says nothing at all.
+   */
+  let listingBudgetOffer: ListingBudgetOffer | null = null;
+  if (sentListing !== null && sentListing.dropped.length > 0) {
+    const sentSkills = record?.skillListing?.skills ?? [];
+    const ownNames = new Set(
+      config.skills.filter((skill) => skill.plugin === null && skill.shadowedBy === null).map((skill) => skill.name),
+    );
+    const ownerLabel = (name: string): string =>
+      ownerOf(name) ?? (ownNames.has(name) ? 'your own' : 'built in');
+    const byOwner = new Map<string, { dropped: string[]; listed: number }>();
+    for (const skill of sentSkills) {
+      const owner = ownerLabel(skill.name);
+      const entry = byOwner.get(owner) ?? { dropped: [], listed: 0 };
+      entry.listed += 1;
+      byOwner.set(owner, entry);
+    }
+    for (const skill of sentListing.dropped) byOwner.get(ownerLabel(skill.name))?.dropped.push(skill.name);
+    const owners = [...byOwner.entries()]
+      .filter(([, entry]) => entry.dropped.length > 0)
+      .sort((a, b) => b[1].dropped.length - a[1].dropped.length)
+      .map(([owner, entry]) => {
+        // The ones you wrote are named. They are the ones you will recognise, and the ones you can
+        // do something about without asking anybody.
+        const named =
+          owner === 'your own'
+            ? ` (${entry.dropped.slice(0, 6).join(', ')}${entry.dropped.length > 6 ? ', ...' : ''})`
+            : '';
+        return `${owner} ${entry.dropped.length} of ${entry.listed}${named}`;
+      });
 
-  const typedOnly = judgeableSkills.filter(
-    (skill) => skillCalls(skill).model === 0 && skillCalls(skill).typed > 0,
-  );
-  if (typedOnly.length > 0) {
-    findings.push({
-      headline: `${typedOnly.length} skill${typedOnly.length === 1 ? '' : 's'} you only ever type, never let the model choose`,
-      detail: `${skillLabels(typedOnly).join(', ')}. Set to user-invocable-only and the slash command keeps working while the description leaves the prompt.`,
-      saves: toTokens(typedOnly.reduce((sum, skill) => sum + skill.listingChars, 0)),
-      // Plugin skills are not affected by skillOverrides, and emitting one would silently do nothing.
-      fix: typedOnly.every((skill) => skill.plugin === null)
-        ? 'skillOverrides in .claude/settings.local.json'
-        : 'skillOverrides in .claude/settings.local.json, except the plugin ones, which need enabledPlugins',
-      actions: typedOnly
-        .map((skill) =>
-          skillAction(
-            skill,
-            'user-invocable-only',
-            `${skill.name} has only ever been typed as /${skill.name}, never chosen by the model.`,
-          ),
-        )
-        .filter((action): action is FixAction => action !== null),
+    const offer = fractionToSendAll(sentListing, config.skillListing);
+    if (offer !== null) {
+      listingBudgetOffer = {
+        ...offer,
+        atLeast: sentListing.uncappedIsFloor,
+        settingsPath: config.settingsTarget,
+      };
+    }
+    const runsTo =
+      `${sentListing.uncappedIsFloor ? 'at least ' : 'about '}` +
+      `${sentListing.uncappedChars.toLocaleString('en-US')}`;
+    const wayOut =
+      offer !== null
+        ? `set skillListingBudgetFraction to ${sentListing.uncappedIsFloor ? 'at least ' : ''}${offer.fraction} and ` +
+          `every description is sent, for about ${offer.addsTokens.toLocaleString('en-US')} more tokens on every turn ` +
+          '(context-tax fix --restore-descriptions writes it). Or make room: each skill switched off below hands ' +
+          'its space to another description'
+        : sentListing.budget.basis === 'env'
+          ? `raise SLASH_COMMAND_TOOL_CHAR_BUDGET to ${runsTo} characters and every description is sent. ` +
+            'Or make room: each skill switched off below hands its space to another description'
+          : 'make room: each skill switched off below hands its space to another description';
+
+    findings.unshift({
+      headline:
+        `${sentListing.dropped.length} of your ${plural(sentListing.entries, 'skill')} ` +
+        `${sentListing.dropped.length === 1 ? 'reaches' : 'reach'} the model as a name with no description`,
+      // Four lines is what the screen gives a detail, so the owners go first and every clause after
+      // them is kept short enough to survive the clamp.
+      detail:
+        `${owners.join(', ')}. A bare name gives the model nothing to choose a skill by. The cap is ` +
+        `${sentListing.budget.basis === 'env' ? '' : 'about '}${sentListing.budget.chars.toLocaleString('en-US')} ` +
+        `characters and yours needs ${runsTo}. From your session of ${picked?.day ?? ''}; who loses out ` +
+        'shifts with recent use.',
+      // Not a saving. One way out costs tokens and the other is already counted by the findings below.
+      saves: null,
+      fix: wayOut,
+      actions: [],
     });
   }
 
-  const neverUsedSkills = judgeableSkills.filter(
+  const judgeableSkills = visibleSkills.filter(skillJudgeable);
+  // A skill the model is never told about costs nothing, so there is nothing in it to recover.
+  const recoverableSkills = judgeableSkills.filter(
+    (skill) => listedByKey.get(skillKey(skill))?.form !== 'hidden',
+  );
+
+  /**
+   * What a finding recovers, per skill, in tokens.
+   *
+   * 🔑 Only a skill with a lever leaves the listing, so only those are counted: a plugin skill
+   * whose plugin you use has no switch, and a number promised for it is a number `fix` can never
+   * deliver. And the saving is the listing before minus the listing after, never a sum of lines,
+   * because past the budget the client hands freed room to another description. Findings are
+   * charged in order against one shrinking listing, so they add up.
+   */
+  const leftListing = new Set<string>();
+  const savingsFor = (skills: ResolvedSkill[]): Map<string, number> => {
+    const withLever = skills.filter((skill) => skill.plugin === null || pluginIsIdle(skill.plugin));
+    const keys = withLever.map(skillKey);
+    const total = toTokens(savedBy(listingPopulation, listingBudget, new Set(keys), leftListing));
+    for (const key of keys) leftListing.add(key);
+    const shares = apportion(
+      total,
+      keys.map((key) => {
+        const listed = listedByKey.get(key);
+        return listed === undefined ? 0 : lineChars(listed);
+      }),
+    );
+    return new Map(keys.map((key, index) => [key, shares[index]]));
+  };
+  const sumOf = (savings: Map<string, number>): number =>
+    [...savings.values()].reduce((sum, value) => sum + value, 0);
+  // First in the detail, not last: the renderer clamps a detail to four lines, and a list of names
+  // long enough to be over the budget is exactly the list that would push this off the screen.
+  const overBudgetNote = (sentListing === null ? packed.overBudget : sentListing.dropped.length > 0)
+    ? 'The listing is over its budget, so most of what this frees goes to another description rather than out of the prompt. '
+    : '';
+
+  const typedOnly = recoverableSkills.filter(
+    (skill) => skillCalls(skill).model === 0 && skillCalls(skill).typed > 0,
+  );
+  const neverUsedSkills = recoverableSkills.filter(
     (skill) => skillCalls(skill).model === 0 && skillCalls(skill).typed === 0,
   );
+  // Counted over both findings before either is written, so the one note a plugin gets carries the
+  // whole number and reads the same from whichever finding emits it.
+  const stuckByPlugin = new Map<string, number>();
+  for (const skill of [...typedOnly, ...neverUsedSkills]) {
+    if (skill.plugin === null || pluginIsIdle(skill.plugin)) continue;
+    stuckByPlugin.set(skill.plugin, (stuckByPlugin.get(skill.plugin) ?? 0) + 1);
+  }
+
+  if (typedOnly.length > 0) {
+    const savings = savingsFor(typedOnly);
+    findings.push({
+      headline: `${typedOnly.length} skill${typedOnly.length === 1 ? '' : 's'} you only ever type, never let the model choose`,
+      detail: `${overBudgetNote}${skillLabels(typedOnly).join(', ')}. Set to user-invocable-only and the slash command keeps working while the description leaves the prompt.`,
+      saves: sumOf(savings),
+      fix: skillFixLine(
+        typedOnly,
+        'skillOverrides in .claude/settings.local.json',
+        'skillOverrides in .claude/settings.local.json for your own',
+      ),
+      actions: skillActions(
+        typedOnly,
+        'user-invocable-only',
+        (skill) => `${skill.name} has only ever been typed as /${skill.name}, never chosen by the model.`,
+        savings,
+        stuckByPlugin,
+      ),
+    });
+  }
+
   if (neverUsedSkills.length > 0) {
     const window = overSessions(skillScope(neverUsedSkills[0]));
+    const savings = savingsFor(neverUsedSkills);
     findings.push({
       headline: `${neverUsedSkills.length} skill${neverUsedSkills.length === 1 ? '' : 's'} never invoked, either way`,
-      detail: `${skillLabels(neverUsedSkills).join(', ')}. Across ${window}.`,
-      saves: toTokens(neverUsedSkills.reduce((sum, skill) => sum + skill.listingChars, 0)),
-      fix: 'set each to off in skillOverrides, or delete the ones you do not recognise',
-      actions: neverUsedSkills
-        .map((skill) =>
-          skillAction(
-            skill,
-            'off',
-            `${skill.name} has not been invoked in ${overSessions(skillScope(skill))}, by you or by the model.`,
-          ),
-        )
-        .filter((action): action is FixAction => action !== null),
+      detail: `${overBudgetNote}${skillLabels(neverUsedSkills).join(', ')}. Across ${window}.`,
+      saves: sumOf(savings),
+      fix: skillFixLine(
+        neverUsedSkills,
+        'set each to off in skillOverrides, or delete the ones you do not recognise',
+        'set your own to off in skillOverrides, or delete the ones you do not recognise',
+      ),
+      actions: skillActions(
+        neverUsedSkills,
+        'off',
+        (skill) =>
+          `${skill.name} has not been invoked in ${overSessions(skillScope(skill))}, by you or by the model.`,
+        savings,
+        stuckByPlugin,
+      ),
     });
   }
 
   const visibleAgents = config.agents.filter((agent) => agent.shadowedBy === null);
+  // The record counts the agents the client ships with as well, which appear in no file.
+  const agentTokens = record?.agents == null ? measure.agents.tokens : toTokens(record.agents.chars);
   rows.push({
-    label: plural(visibleAgents.length, 'agent'),
+    label: plural(record?.agents == null ? visibleAgents.length : record.agents.items, 'agent'),
     kind: 'agents',
-    tokens: measure.agents.tokens,
+    count: record?.agents == null ? visibleAgents.length : record.agents.items,
+    tokens: agentTokens,
     // No second half: the frontmatter is resident and the body is not counted anywhere.
     loadedTokens: null,
-    share: share(measure.agents.tokens),
+    share: share(agentTokens),
     calls: null,
     perCall: null,
     basis: null,
@@ -806,13 +1255,15 @@ export function buildLedger(
     fix: null,
   });
 
+  const memoryTokens = record?.instructions == null ? measure.memory.tokens : toTokens(record.instructions.chars);
   rows.push({
-    label: plural(measure.memory.items, 'memory file'),
+    label: plural(record?.instructions == null ? measure.memory.items : record.instructions.files.length, 'memory file'),
     kind: 'memory',
-    tokens: measure.memory.tokens,
+    count: record?.instructions == null ? measure.memory.items : record.instructions.files.length,
+    tokens: memoryTokens,
     // No second half: the frontmatter is resident and the body is not counted anywhere.
     loadedTokens: null,
-    share: share(measure.memory.tokens),
+    share: share(memoryTokens),
     calls: null,
     perCall: null,
     basis: null,
@@ -823,11 +1274,84 @@ export function buildLedger(
     fix: null,
   });
 
+  /**
+   * What Claude Code sends on its own account, and what your hooks add in front of the first turn.
+   *
+   * 🔑 This is most of what `unattributed` used to be. The client's tool schemas and system prompt
+   * are the largest block in a prompt and were invisible to a tool that only reads config, so the
+   * biggest row on the screen was the one named "we do not know". A recent client records both.
+   * Whatever is still left over stays `unattributed`, and it is mostly the distance between
+   * `chars/4` and a real tokenizer on JSON.
+   */
+  if (record !== null) {
+    const clientRow = (
+      label: string,
+      chars: number,
+      kind: 'client' | 'hooks',
+      why: string,
+      part?: ClientPart,
+      count?: number,
+    ): void => {
+      const tokens = toTokens(chars);
+      rows.push({
+        label,
+        kind,
+        ...(part === undefined ? {} : { part }),
+        ...(count === undefined ? {} : { count }),
+        tokens,
+        loadedTokens: null,
+        share: share(tokens),
+        calls: null,
+        perCall: null,
+        basis: null,
+        verdict: { kind: 'not-attributable', why },
+        fix: null,
+      });
+    };
+    const itsOwn = 'sent by Claude Code itself on every turn, so there is nothing here to switch off';
+    if (record.hooks !== null) {
+      clientRow(
+        'your hooks',
+        record.hooks.chars,
+        'hooks',
+        'what your hooks put in front of the first turn. A hook that adds context on every prompt adds this much again each time',
+      );
+    }
+    if (record.builtinTools !== null) {
+      clientRow(
+        `its ${plural(record.builtinTools.items, 'tool')}`,
+        record.builtinTools.chars,
+        'client',
+        itsOwn,
+        'tools',
+        record.builtinTools.items,
+      );
+    }
+    if (record.systemPrompt !== null) {
+      clientRow('its system prompt', record.systemPrompt.chars, 'client', itsOwn, 'system-prompt');
+    }
+    if (record.toolList !== null) clientRow('its tool name list', record.toolList.chars, 'client', itsOwn, 'tool-list');
+    if (record.sessionDetails !== null) {
+      clientRow('its session details', record.sessionDetails.chars, 'client', itsOwn, 'session-details');
+    }
+  }
+
   const attributed = rows.reduce((sum, row) => sum + (row.tokens ?? 0), 0);
   const overAttributed = total !== null && attributed > total;
 
   return {
     cwd: config.cwd,
+    source:
+      picked === null
+        ? { kind: 'measured' }
+        : { kind: 'record', day: picked.day, client: picked.record.client, asSent: picked.record.asSent },
+    // Only a listing pinned against its budget proves the window. Nothing else on disk does.
+    windowTokens: sentListing?.budget.windowTokens ?? null,
+    listingBudget: listingBudgetOffer,
+    neverReceived:
+      sentListing === null || sentListing.dropped.length === 0
+        ? null
+        : { dropped: sentListing.dropped.length, listed: sentListing.entries },
     actions: mergeActions(findings.flatMap((finding) => finding.actions)),
     machine: machineTotals(evidence, allSessions),
     reconciliation: {
@@ -868,10 +1392,13 @@ export function buildLedger(
 }
 
 export type {
+  ClientPart,
   EvidenceScope,
   Finding,
   Ledger,
   LedgerRow,
+  LedgerSource,
+  ListingBudgetOffer,
   MachineEvidence,
   Reconciliation,
   RowKind,
