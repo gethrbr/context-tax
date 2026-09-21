@@ -10,7 +10,7 @@ import { platform } from 'node:os';
 import { join } from 'node:path';
 
 import { asRecord, asStringArray, readJsonObject } from './read.js';
-import type { ConfigSource, Problem, SkillOverride } from './types.js';
+import type { ConfigSource, Problem, SkillListingSettings, SkillOverride } from './types.js';
 
 const SKILL_OVERRIDES: readonly SkillOverride[] = ['on', 'name-only', 'user-invocable-only', 'off'];
 
@@ -41,6 +41,7 @@ export interface EffectiveSettings {
   skillOverrides: Map<string, { value: SkillOverride; from: string }>;
   /** Where a `--fix` should write a new `skillOverrides` entry. */
   skillOverridesTarget: string;
+  skillListing: SkillListingSettings;
 }
 
 interface Layer {
@@ -64,6 +65,14 @@ function layers(cwd: string, home: string): Layer[] {
     { kind: 'managed', path: managedSettingsPath() },
   ];
 }
+
+/** A setting that is a size or a share: anything that is not a positive number is not set. */
+function asPositiveNumber(value: unknown): number | null {
+  const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  return typeof parsed === 'number' && Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+const BUDGET_ENV = 'SLASH_COMMAND_TOOL_CHAR_BUDGET';
 
 function asSkillOverride(value: unknown): SkillOverride | null {
   return typeof value === 'string' && (SKILL_OVERRIDES as readonly string[]).includes(value)
@@ -90,6 +99,7 @@ export async function mergeSettings(
   cwd: string,
   home: string,
   problems: Problem[],
+  env: Record<string, string | undefined> = process.env,
 ): Promise<MergedSettings> {
   const settings: EffectiveSettings = {
     enableAllProjectMcpServers: false,
@@ -99,6 +109,13 @@ export async function mergeSettings(
     skillOverrides: new Map(),
     // The `/skills` menu writes here, so a fix that wrote anywhere else would be invisible to it.
     skillOverridesTarget: join(cwd, '.claude', 'settings.local.json'),
+    skillListing: {
+      budgetFraction: null,
+      maxDescChars: null,
+      // The shell this runs in is the shell a session starts from. A settings `env` block is
+      // applied on top of it by the client, so it is applied on top of it below.
+      envBudgetChars: asPositiveNumber(env[BUDGET_ENV]),
+    },
   };
   const sources: ConfigSource[] = [];
 
@@ -125,6 +142,14 @@ export async function mergeSettings(
 
     for (const name of asStringArray(json.enabledMcpjsonServers)) settings.enabledMcpjsonServers.add(name);
     for (const name of asStringArray(json.disabledMcpjsonServers)) settings.disabledMcpjsonServers.add(name);
+
+    const budgetFraction = asPositiveNumber(json.skillListingBudgetFraction);
+    if (budgetFraction !== null) settings.skillListing.budgetFraction = budgetFraction;
+    const maxDescChars = asPositiveNumber(json.skillListingMaxDescChars);
+    if (maxDescChars !== null) settings.skillListing.maxDescChars = maxDescChars;
+    // One named key out of a block that routinely holds API keys. Nothing else in it is read.
+    const envBudget = asPositiveNumber(asRecord(json.env)?.[BUDGET_ENV]);
+    if (envBudget !== null) settings.skillListing.envBudgetChars = envBudget;
 
     const overrides = asRecord(json.skillOverrides);
     if (overrides !== null) {

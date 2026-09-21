@@ -136,6 +136,8 @@ function verdictLine(verdict: Verdict): { text: string; loud: boolean } | null {
       return { text: `cannot start: ${verdict.reason}`, loud: true };
     case 'not-measured':
       return { text: verdict.reason, loud: false };
+    case 'not-sent':
+      return { text: verdict.reason, loud: false };
     case 'not-attributable':
       return { text: verdict.why, loud: false };
   }
@@ -230,10 +232,23 @@ function machineLine(machine: MachineEvidence): string {
  */
 function headline(ledger: Ledger): string {
   const { total, attributed } = ledger.reconciliation;
+  // 🔑 A share of the window is the form of this number people feel, and it is only printed when a
+  // session proves the window. "31% of your window" was said once against an assumed 200,000 on a
+  // machine running 750,000, where the same tokens are 8%. The window is printed beside the share
+  // so the reader can check the one against the other.
+  const ofWindow =
+    total === null || ledger.windowTokens === null || ledger.windowTokens <= 0
+      ? ''
+      : `, ${Math.max(1, Math.round((total / ledger.windowTokens) * 100))}% of a window of about ` +
+        `${n(ledger.windowTokens)}, before you type a word`;
   const lead =
     total === null
       ? `${n(attributed)} tokens of context measured here`
-      : `${n(total)} tokens on every turn`;
+      : `${n(total)} tokens on every turn${ofWindow}`;
+  if (ofWindow !== '' && ledger.recoverable > 0) {
+    const found = ledger.findings.length;
+    return `${lead}. ${n(ledger.recoverable)} of them are recoverable from the ${found} finding${found === 1 ? '' : 's'} below.`;
+  }
   if (ledger.recoverable <= 0) {
     // 🚨 Two different empty results, and only one of them is good news. Nothing was judged in a
     // directory with no history of its own, and telling that reader everything is earning its
@@ -322,7 +337,10 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
   const { reconciliation } = ledger;
   const columns = columnsFor(width);
   const servers = ledger.rows.filter((row) => row.kind === 'mcp-server');
-  const files = ledger.rows.filter((row) => row.kind !== 'mcp-server');
+  const files = ledger.rows.filter((row) => row.kind !== 'mcp-server' && row.kind !== 'client');
+  // What the client sends on its own account, under its own title: a row reading `14 tools` means
+  // nothing until it is said whose tools they are.
+  const client = ledger.rows.filter((row) => row.kind === 'client');
 
   const totals: Section = [];
   if (!reconciliation.overAttributed && reconciliation.unattributed !== null) {
@@ -351,6 +369,9 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
   const sections: Section[] = [
     servers.map((row) => cellsFor(row, colour)),
     files.map((row) => cellsFor(row, colour)),
+    client.length === 0
+      ? []
+      : [[{ text: 'CLAUDE CODE ITSELF', paint: colour.bold }], ...client.map((row) => cellsFor(row, colour))],
   ].filter((section) => section.length > 0);
   if (totals.length > 0) sections.push(totals);
 
@@ -418,6 +439,21 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
       colour.dim,
     );
   }
+  // 🔑 Read or weighed, said once, for the whole table. A number that came from what a session sent
+  // and a number that came from a model of the client are different kinds of claim, and a screen
+  // that mixed them without saying so is how the skills row stayed several times too large.
+  say(
+    ledger.source.kind === 'record'
+      ? `Rows are what your session of ${ledger.source.day} sent, read from its transcript` +
+          (ledger.source.asSent
+            ? '.'
+            : ', written by an older Claude Code that kept the blocks and not the framing around them.') +
+          ' A row that says otherwise was weighed from your config.'
+      : 'Rows are weighed from your config, because no session here recorded what it sent. A recent' +
+          ' Claude Code does, and the next run reads it.',
+    4,
+    colour.dim,
+  );
   say(
     `${PROVISIONAL_NOTE}. tokens: what every turn carries. deferred: the schemas behind it, paid` +
       ' when something loads them.',
@@ -455,8 +491,11 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
     line();
   }
   say(
-    'MCP connectors attached to your claude.ai account are also real context and appear in no file' +
-      ' on this machine. Run /context in a session to see them.',
+    ledger.source.kind === 'record'
+      ? 'MCP connectors attached to your claude.ai account appear in no file on this machine. The ones' +
+          ' your session connected are rows above, read from what it sent.'
+      : 'MCP connectors attached to your claude.ai account are also real context and appear in no file' +
+          ' on this machine. Run /context in a session to see them.',
     4,
     colour.dim,
   );

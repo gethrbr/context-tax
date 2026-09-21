@@ -78,6 +78,13 @@ function mutate(root: Shape, action: FileAction): boolean {
       overrides[action.skill] = action.value;
       return true;
     }
+    case 'listing-budget': {
+      // Never lowered. Somebody who already set it higher than this made that choice on purpose.
+      const current = root.skillListingBudgetFraction;
+      if (typeof current === 'number' && current >= action.fraction) return false;
+      root.skillListingBudgetFraction = action.fraction;
+      return true;
+    }
   }
 }
 

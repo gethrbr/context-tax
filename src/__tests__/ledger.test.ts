@@ -10,8 +10,10 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { Evidence, ProjectEvidence, SessionEvidence } from '../evidence/types.js';
+import type { Evidence, ProjectEvidence, SentRecord, SentSkill, SessionEvidence } from '../evidence/types.js';
 import { buildLedger } from '../ledger/index.js';
+import { fractionToSendAll, pickRecord, readSentListing } from '../ledger/sent.js';
+import { toListedSkills } from '../measure/skill-listing.js';
 import type { MeasureResult, MeasuredMcpServer } from '../measure/types.js';
 import type { McpLaunchSpec, ResolveResult, ResolvedConfig, ResolvedMcpServer } from '../resolve/types.js';
 
@@ -22,14 +24,17 @@ function session(overrides: Partial<SessionEvidence> = {}): SessionEvidence {
     sessionId: 'a',
     file: '/x.jsonl',
     kind: 'session',
+    headless: false,
     cwd: ROOT,
     turns: 100,
     sidechainTurns: 0,
     coldStartTokens: 50_000,
     contextTokens: 1_000_000,
+    peakContextTokens: 150_000,
     outputTokens: 1_000,
     firstSeen: '2026-06-01T00:00:00.000Z',
     lastSeen: '2026-06-01T01:00:00.000Z',
+    record: null,
     ...overrides,
   };
 }
@@ -111,6 +116,7 @@ function resolveResult(servers: ResolvedMcpServer[], config: Partial<ResolvedCon
       sources: [],
       mcpServers: servers,
       skills: [],
+      skillListing: { budgetFraction: null, maxDescChars: null, envBudgetChars: null },
       agents: [],
       commands: [],
       memory: [],
@@ -405,6 +411,8 @@ describe('skills', () => {
   const skill = (name: string, plugin: string | null) => ({
     name,
     description: 'd',
+    whenToUse: null,
+    modelInvocable: true,
     scope: plugin === null ? ('user' as const) : ('plugin' as const),
     path: '/x',
     plugin,
@@ -438,13 +446,19 @@ describe('skills', () => {
     expect(ledger.findings[0].fix).toContain('skillOverrides');
   });
 
+  /**
+   * 🚨 A plugin skill you type is, by that fact, in a plugin you use. `skillOverrides` does nothing
+   * to it and `enabledPlugins` would take the slash command away, so the line names neither as the
+   * fix. It used to point at `enabledPlugins`.
+   */
   it('routes a plugin skill away from skillOverrides, which would silently do nothing to it', () => {
     const ledger = buildLedger(
       resolveResult([], { skills: [skill('typed', 'pack@market')] }),
       measureResult([]),
       evidence(twelveSessions, [project({ slashCommands: { typed: 9 } })]),
     );
-    expect(ledger.findings[0].fix).toContain('enabledPlugins');
+    expect(ledger.findings[0].fix).toContain('does not apply to plugin skills');
+    expect(ledger.findings[0].fix).not.toContain('enabledPlugins');
   });
 
   it('leaves a skill the model actually chooses alone', () => {
@@ -467,13 +481,24 @@ describe('skills', () => {
  * things. These tests are mostly about the edits that must NOT be produced.
  */
 describe('the actions behind a finding', () => {
-  const skill = (name: string, plugin: string | null, listingChars = 400) => ({
+  /**
+   * `lineChars` is the whole listing line, `- name: description`, and the description is really
+   * that long. A fixture that claimed 400 characters over a one-letter description was costed at
+   * its claim, which is the same mistake the ledger used to make about a real config.
+   */
+  const skill = (name: string, plugin: string | null, lineChars = 400) => {
+    const listingName = plugin === null ? name : `${plugin.split('@')[0]}:${name}`;
+    return skillOf(name, plugin, 'd'.repeat(lineChars - listingName.length - 4));
+  };
+  const skillOf = (name: string, plugin: string | null, description: string) => ({
     name,
-    description: 'd',
+    description,
+    whenToUse: null,
+    modelInvocable: true,
     scope: plugin === null ? ('user' as const) : ('plugin' as const),
     path: '/x',
     plugin,
-    listingChars,
+    listingChars: name.length + 2 + description.length,
     shadowedBy: null,
     override: null,
   });
@@ -545,6 +570,45 @@ describe('the actions behind a finding', () => {
       evidence(twelveSessions, [project()]),
     );
     expect(ledger.findings[0].headline).toContain('cannot start');
+    expect(ledger.actions).toEqual([]);
+  });
+
+  /**
+   * 🚨 `failed` means this tool could not start it. A remote server behind a login answers the
+   * client, which holds the token, and answers this tool with a 401. The transcripts are the exact
+   * half of the evidence, so when they show calls the server is not broken, the probe is blind.
+   */
+  it('🚨 does not call a server broken when your sessions are calling it', () => {
+    const ledger = buildLedger(
+      resolveResult([server({ name: 'remote' })]),
+      measureResult([
+        measured({
+          name: 'remote',
+          status: { kind: 'unmeasured', reason: 'HTTP 401 Unauthorized.', cause: 'failed' },
+          tokens: null,
+          residentTokens: null,
+        }),
+      ]),
+      evidence(twelveSessions, [project({ mcpServers: { remote: { calls: 40, sessions: 9, tools: {} } } })]),
+    );
+    expect(ledger.rows[0].verdict).toEqual({
+      kind: 'not-measured',
+      reason: expect.stringContaining('it has answered 40 calls'),
+    });
+    expect(ledger.findings).toEqual([]);
+  });
+
+  /** A server with no tools weighs nothing and cannot be called. Neither fact is a finding. */
+  it('says nothing about a server that costs nothing', () => {
+    const ledger = buildLedger(
+      resolveResult([server({ name: 'empty' })]),
+      measureResult([
+        measured({ name: 'empty', toolCount: 0, chars: 0, tokens: 0, residentChars: 0, residentTokens: 0, tools: [] }),
+      ]),
+      evidence(twelveSessions, [project()]),
+    );
+    expect(ledger.rows[0].verdict.kind).toBe('never-called');
+    expect(ledger.findings).toEqual([]);
     expect(ledger.actions).toEqual([]);
   });
 
@@ -689,6 +753,191 @@ describe('the actions behind a finding', () => {
         saves: 100,
       },
     ]);
+  });
+
+  /**
+   * 🚨 The client caps the skill listing, so a skill is costed as what is sent and a saving is the
+   * listing before minus the listing after. The config below is the shape that broke the old sum:
+   * one plugin you do use, shipping far more description than the listing has room for.
+   */
+  describe('a plugin bigger than the listing has room for', () => {
+    const bigPlugin = Array.from({ length: 80 }, (_, index) => skill(`skill-${index}`, 'pack@market', 1_000));
+    const usedServer = project({ skills: { 'pack:skill-0': { model: 4, user: 0 } } });
+    const skillsRow = (ledger: ReturnType<typeof buildLedger>) => ledger.rows.find((row) => row.kind === 'skills');
+
+    it('costs the row at the budget, not at the 80,000 characters on disk', () => {
+      const ledger = buildLedger(
+        resolveResult([], { skills: bigPlugin, plugins: [plugin('pack@market')] }),
+        measureResult([]),
+        evidence(twelveSessions, [usedServer]),
+      );
+      const row = skillsRow(ledger);
+      // 8,000 characters is 1% of the default window, which is 2,000 tokens. The sum of lines
+      // would have printed 20,000.
+      expect(row?.tokens).toBeLessThanOrEqual(2_000);
+      expect(row?.tokens).toBeGreaterThan(1_500);
+      expect(row?.verdict).toMatchObject({ why: expect.stringContaining('caps it at 8,000') });
+      // No session here recorded a listing, so the row has to say it was modelled.
+      expect(row?.verdict).toMatchObject({ why: expect.stringContaining('modelled') });
+      expect(ledger.source).toEqual({ kind: 'measured' });
+    });
+
+    it('promises nothing for skills that have no switch', () => {
+      const ledger = buildLedger(
+        resolveResult([], { skills: bigPlugin, plugins: [plugin('pack@market')] }),
+        measureResult([]),
+        evidence(twelveSessions, [usedServer]),
+      );
+      // 79 skills never invoked, every one of them a plugin skill in a plugin that is used. `fix`
+      // can write nothing for them, so the headline cannot count them.
+      expect(ledger.findings).toHaveLength(1);
+      expect(ledger.findings[0].saves).toBe(0);
+      expect(ledger.recoverable).toBe(0);
+    });
+
+    it('sizes the budget to the window a session proves', () => {
+      const bigWindow = twelveSessions.map((entry) => ({ ...entry, peakContextTokens: 412_000 }));
+      const ledger = buildLedger(
+        resolveResult([], { skills: bigPlugin, plugins: [plugin('pack@market')] }),
+        measureResult([]),
+        evidence(bigWindow, [usedServer]),
+      );
+      const row = skillsRow(ledger);
+      expect(row?.tokens).toBeGreaterThan(9_000);
+      expect(row?.tokens).toBeLessThanOrEqual(10_000);
+      expect(row?.verdict).toMatchObject({ why: expect.stringContaining('1,000,000-token window') });
+    });
+
+    it('saves next to nothing by switching off your own skills while the plugin fills the room', () => {
+      const ledger = buildLedger(
+        resolveResult([], {
+          skills: [skill('mine', null, 1_000), ...bigPlugin],
+          plugins: [plugin('pack@market')],
+        }),
+        measureResult([]),
+        evidence(twelveSessions, [usedServer]),
+      );
+      const mine = ledger.actions.find((action) => action.kind === 'skill-override');
+      // A sum of lines says 250 tokens. The listing is over budget, so the room goes to the plugin.
+      expect(mine?.saves).toBeLessThan(50);
+      expect(ledger.findings[0].detail).toContain('over its budget');
+    });
+  });
+
+  it('🚨 says the same number in the headline, the finding and the plan', () => {
+    const ledger = buildLedger(
+      resolveResult([], {
+        skills: [
+          skill('one', null, 333),
+          skill('two', null, 777),
+          skill('three', 'used@market', 500),
+          skill('four', 'used@market'),
+        ],
+        plugins: [plugin('used@market')],
+      }),
+      measureResult([]),
+      // `four` is what makes the plugin one you use, which is what leaves `three` without a switch.
+      evidence(twelveSessions, [project({ skills: { 'used:four': { model: 3, user: 0 } } })]),
+    );
+    const planned = ledger.actions.reduce((sum, action) => sum + ('saves' in action ? (action.saves ?? 0) : 0), 0);
+    const found = ledger.findings.reduce((sum, finding) => sum + (finding.saves ?? 0), 0);
+    expect(planned).toBe(found);
+    expect(ledger.recoverable).toBe(found);
+    // `one` and `two` leave with their newlines: 333 + 777 + 2. `three` has no switch.
+    expect(found).toBe(Math.round(1_112 / 4));
+  });
+
+  /**
+   * 🚨 A plugin you use has no per-skill switch, and that is one fact about the plugin. It used to be
+   * said once per skill, so a plugin with a hundred unused skills buried the edits `fix` does make
+   * under a hundred copies of one sentence.
+   */
+  describe('skills with no switch of their own', () => {
+    const notes = (ledger: ReturnType<typeof buildLedger>) =>
+      ledger.actions.filter((action) => action.kind === 'manual');
+
+    it('hands a plugin back once, with the count, not once per skill', () => {
+      const dead = Array.from({ length: 40 }, (_, index) => skill(`dead-${index}`, 'pack@market', 60));
+      const ledger = buildLedger(
+        resolveResult([], { skills: [...dead, skill('alive', 'pack@market', 60)], plugins: [plugin('pack@market')] }),
+        measureResult([]),
+        evidence(twelveSessions, [project({ skills: { 'pack:alive': { model: 5, user: 0 } } })]),
+      );
+      expect(notes(ledger)).toEqual([
+        { kind: 'manual', command: null, why: expect.stringContaining('40 skills the model has never chosen come from') },
+      ]);
+      expect(ledger.findings[0].actions).toHaveLength(1);
+    });
+
+    it('says it once across both findings, and once for each plugin', () => {
+      const ledger = buildLedger(
+        resolveResult([], {
+          skills: [
+            skill('typed', 'pack@market'),
+            skill('dead-one', 'pack@market'),
+            skill('dead-two', 'pack@market'),
+            skill('idle', 'other@market'),
+            skill('busy', 'other@market'),
+          ],
+          plugins: [plugin('pack@market'), plugin('other@market')],
+        }),
+        measureResult([]),
+        evidence(twelveSessions, [
+          project({ slashCommands: { 'pack:typed': 9 }, skills: { 'other:busy': { model: 2, user: 0 } } }),
+        ]),
+      );
+      // Two findings reach the pack plugin, typed-only and never-invoked, and it is still one line.
+      expect(ledger.findings).toHaveLength(2);
+      expect(notes(ledger).map((note) => note.why)).toEqual([
+        expect.stringContaining('3 skills the model has never chosen come from the pack@market plugin'),
+        expect.stringContaining('1 skill the model has never chosen comes from the other@market plugin'),
+      ]);
+    });
+
+    it('🚨 does not tell you to set a plugin skill in skillOverrides', () => {
+      const ledger = buildLedger(
+        resolveResult([], {
+          skills: [skill('mine', null), skill('dead', 'pack@market'), skill('alive', 'pack@market')],
+          plugins: [plugin('pack@market')],
+        }),
+        measureResult([]),
+        evidence(twelveSessions, [project({ skills: { 'pack:alive': { model: 5, user: 0 } } })]),
+      );
+      expect(ledger.findings[0].fix).toBe(
+        'set your own to off in skillOverrides, or delete the ones you do not recognise; ' +
+          'the ones from a plugin you use have no switch of their own',
+      );
+    });
+
+    it('names the plugin switch when the whole plugin is idle', () => {
+      const ledger = buildLedger(
+        resolveResult([], { skills: [skill('dead', 'pack@market')], plugins: [plugin('pack@market')] }),
+        measureResult([]),
+        evidence(twelveSessions, [project()]),
+      );
+      expect(ledger.findings[0].fix).toBe('set "pack@market": false in enabledPlugins');
+    });
+
+    it('keeps the plain sentence when every skill is your own', () => {
+      const ledger = buildLedger(
+        resolveResult([], { skills: [skill('mine', null)] }),
+        measureResult([]),
+        evidence(twelveSessions, [project()]),
+      );
+      expect(ledger.findings[0].fix).toBe(
+        'set each to off in skillOverrides, or delete the ones you do not recognise',
+      );
+    });
+  });
+
+  it('finds nothing to recover in a skill the model is already not told about', () => {
+    const ledger = buildLedger(
+      resolveResult([], { skills: [{ ...skill('silenced', null), override: 'off' as const }] }),
+      measureResult([]),
+      evidence(twelveSessions, [project()]),
+    );
+    expect(ledger.findings).toEqual([]);
+    expect(ledger.rows.find((row) => row.kind === 'skills')?.tokens).toBe(0);
   });
 });
 
@@ -899,6 +1148,8 @@ describe('a project with no history of its own', () => {
   const localSkill = (scope: 'user' | 'project') => ({
     name: 'dead',
     description: 'd',
+    whenToUse: null,
+    modelInvocable: true,
     scope,
     path: '/x',
     plugin: null,
@@ -963,8 +1214,8 @@ describe('the rows that count things', () => {
   it('counts to one in the singular', () => {
     // `1 memory files` shipped on the front screen of every project with a single CLAUDE.md.
     const skill = {
-      name: 'one', description: 'd', scope: 'project' as const, path: `${ROOT}/.claude/skills/one/SKILL.md`,
-      plugin: null, listingChars: 40, shadowedBy: null, override: null,
+      name: 'one', description: 'd', whenToUse: null, modelInvocable: true, scope: 'project' as const,
+      path: `${ROOT}/.claude/skills/one/SKILL.md`, plugin: null, listingChars: 40, shadowedBy: null, override: null,
     };
     const agent = {
       name: 'one', description: 'd', scope: 'project' as const, path: `${ROOT}/.claude/agents/one.md`,
@@ -1026,6 +1277,8 @@ describe('a machine too new to judge anything', () => {
   const newSkill = {
     name: 'dead',
     description: 'd',
+    whenToUse: null,
+    modelInvocable: true,
     scope: 'user' as const,
     path: '/x',
     plugin: null,
@@ -1057,5 +1310,381 @@ describe('a machine too new to judge anything', () => {
 
     expect(ledger.findings[0].headline).toContain('never invoked');
     expect(ledger.findings[0].detail).toContain('5 sessions here');
+  });
+});
+
+/* ---------------------------------------------------------------------------------------- */
+
+/**
+ * Rows read from what a session sent.
+ *
+ * 🔑 The guards in this block are the reason `0.4.0` exists. The packing model this replaces was
+ * right about the formula and wrong about the window, on the machine it was written on, and nothing
+ * in the suite could tell: every test fed the model its own assumption. Each case here puts a
+ * record and a config side by side that **disagree**, so the only way to pass is to believe the
+ * right one.
+ */
+describe('rows read from what a session sent', () => {
+  const skillOf = (name: string, plugin: string | null, lineChars: number, override: 'name-only' | null = null) => {
+    const listingName = plugin === null ? name : `${plugin.split('@')[0]}:${name}`;
+    const description = 'd'.repeat(lineChars - listingName.length - 4);
+    return {
+      name,
+      description,
+      whenToUse: null,
+      modelInvocable: true,
+      scope: plugin === null ? ('user' as const) : ('plugin' as const),
+      path: '/x',
+      plugin,
+      listingChars: name.length + 2 + description.length,
+      shadowedBy: null,
+      override,
+    };
+  };
+  const plugin = (id: string) => ({
+    id,
+    enabled: true,
+    enabledBy: '/home/.claude/settings.json',
+    installPath: '/plugins/x',
+    scope: 'user',
+    installedAt: '2026-01-01T00:00:00.000Z',
+  });
+  const sent = (name: string, described: boolean, lineChars: number): SentSkill => ({
+    name,
+    described,
+    chars: described ? lineChars : name.length + 2,
+  });
+  const record = (overrides: Partial<SentRecord> = {}): SentRecord => ({
+    client: '2.1.300',
+    asSent: true,
+    skillListing: null,
+    instructions: null,
+    agents: null,
+    toolList: null,
+    servers: {},
+    failedServers: [],
+    hooks: null,
+    sessionDetails: null,
+    systemPrompt: null,
+    builtinTools: null,
+    ...overrides,
+  });
+  /** The newest of the twelve carries the record, the way the newest session on a machine does. */
+  const withRecord = (sentRecord: SentRecord, at = 11): SessionEvidence[] =>
+    twelveSessions.map((entry, index) => (index === at ? { ...entry, record: sentRecord } : entry));
+
+  // Eighty plugin skills of 1,000 characters, one of your own, and one you set to `name-only`.
+  const pack = Array.from({ length: 80 }, (_, index) => skillOf(`skill-${index}`, 'pack@market', 1_000));
+  const onDisk = [skillOf('deploy-check', null, 400), skillOf('quiet', null, 300, 'name-only'), ...pack];
+  // What the session recorded: twenty of the plugin's kept their description, sixty did not, yours
+  // did not, and one skill the client ships with is there that no file accounts for.
+  const listed: SentSkill[] = [
+    sent('keybindings', true, 500),
+    sent('deploy-check', false, 400),
+    sent('quiet', false, 300),
+    ...pack.map((_, index) => sent(`pack:skill-${index}`, index < 20, 1_000)),
+  ];
+  const listing = { chars: 30_086, listChars: 30_001, entries: listed.length, bare: 62, skills: listed };
+  const usesThePack = project({ skills: { 'pack:skill-0': { model: 4, user: 0 } } });
+  const build = (sentRecord: SentRecord, sessions = withRecord(sentRecord)) =>
+    buildLedger(
+      resolveResult([], { skills: onDisk, plugins: [plugin('pack@market')] }),
+      measureResult([]),
+      evidence(sessions, [usesThePack]),
+    );
+  const skillsRow = (ledger: ReturnType<typeof buildLedger>) => ledger.rows.find((row) => row.kind === 'skills');
+
+  it('🚨 reads the session a person started, not the newer one a script did', () => {
+    // `claude -p` is routinely run with settings nobody works under. Here a benchmark run, newest
+    // on the machine, listed one skill. Read as "your session", it would report a listing of 10
+    // tokens and hide sixty-one dropped descriptions behind it.
+    const scripted = record({
+      skillListing: { chars: 40, listChars: 40, entries: 1, bare: 0, skills: [sent('keybindings', true, 40)] },
+    });
+    const sessions = twelveSessions.map((entry, index) =>
+      index === 11
+        ? { ...entry, headless: true, record: scripted }
+        : index === 10
+          ? { ...entry, record: record({ skillListing: listing }) }
+          : entry,
+    );
+    const ledger = build(scripted, sessions);
+    expect(skillsRow(ledger)?.tokens).toBe(7_522);
+    expect(ledger.source).toMatchObject({ kind: 'record', day: '2026-06-11' });
+    expect(ledger.neverReceived?.dropped).toBe(61);
+  });
+
+  it('🚨 does not let scripted runs say what a turn costs here', () => {
+    // Seven of the twelve are `claude -p` runs with every plugin switched off: 5,000 tokens each
+    // where a working session opens at 50,000. Counted in, the median is the benchmark's.
+    const mixed = twelveSessions.map((entry, index) =>
+      index % 2 === 1 || index === 0 ? { ...entry, headless: true, coldStartTokens: 5_000 } : entry,
+    );
+    const ledger = buildLedger(resolveResult([]), measureResult([]), evidence(mixed, [project()]));
+    expect(ledger.reconciliation.total).toBe(50_000);
+    // With nobody at the keyboard in the whole history, a scripted run is what there is.
+    const scriptedOnly = mixed.filter((entry) => entry.headless);
+    const alone = buildLedger(resolveResult([]), measureResult([]), evidence(scriptedOnly, [project()]));
+    expect(alone.reconciliation.total).toBe(5_000);
+  });
+
+  it('prefers the session a person started wherever the record is looked for', () => {
+    // The ledger drops scripted sessions from its recent window before it looks, so through the
+    // ledger this preference is hidden behind that one. It matters when the recent window holds no
+    // record and the whole history is searched, which is this call.
+    const scripted = record({
+      skillListing: { chars: 40, listChars: 40, entries: 1, bare: 0, skills: [sent('keybindings', true, 40)] },
+    });
+    const script = session({ sessionId: 'script', headless: true, record: scripted, firstSeen: '2026-06-20T00:00:00.000Z' });
+    const person = session({ sessionId: 'person', record: record({ skillListing: listing }) });
+    expect(pickRecord([script, person])?.session.sessionId).toBe('person');
+    // A scripted record still beats none at all.
+    expect(pickRecord([script])?.session.sessionId).toBe('script');
+    expect(pickRecord([session()])).toBeNull();
+  });
+
+  it('offers no fraction when even the whole window would not send every description', () => {
+    // The setting stops at 1. A listing that needs more than the window is not fixed by a number,
+    // and an offer of 1.2 is one the client refuses.
+    const settings = { budgetFraction: null, maxDescChars: null, envBudgetChars: null };
+    const listed = toListedSkills(onDisk, settings);
+    const read = readSentListing(record({ skillListing: listing }), listed, settings);
+    expect(read).not.toBeNull();
+    if (read === null) return;
+    expect(fractionToSendAll(read, settings)).toMatchObject({ fraction: expect.any(Number) });
+    expect(fractionToSendAll({ ...read, uncappedChars: read.budget.chars * 120 }, settings)).toBeNull();
+  });
+
+  it('🚨 costs the skills row at what was sent, not at what the files would pack to', () => {
+    const ledger = build(record({ skillListing: listing }));
+    // 30,086 characters as sent. The model, left alone, would have packed these files into 8,000.
+    expect(skillsRow(ledger)?.tokens).toBe(7_522);
+    expect(skillsRow(ledger)?.label).toBe('83 skills');
+    expect(skillsRow(ledger)?.verdict).toMatchObject({ why: expect.stringContaining('as sent in your session of 2026-06-12') });
+    expect(ledger.source).toEqual({ kind: 'record', day: '2026-06-12', client: '2.1.300', asSent: true });
+  });
+
+  it('🚨 reads the budget, and the window behind it, back out of a listing that lost descriptions', () => {
+    const ledger = build(record({ skillListing: listing }));
+    // 30,001 characters pinned against a budget is a budget of 30,000: 1% of 750,000 tokens. A
+    // model that knew only 200,000 and 1,000,000 printed 40,000 here and was wrong.
+    expect(ledger.windowTokens).toBe(750_000);
+    expect(skillsRow(ledger)?.verdict).toMatchObject({ why: expect.stringContaining('about 30,000 characters') });
+    expect(skillsRow(ledger)?.verdict).toMatchObject({ why: expect.stringContaining('about 750,000 tokens') });
+  });
+
+  it('claims no window when every description was sent', () => {
+    const everything = listed.map((skill) => ({ ...skill, described: true }));
+    const ledger = build(record({ skillListing: { ...listing, bare: 0, skills: everything } }));
+    expect(ledger.windowTokens).toBeNull();
+    expect(ledger.neverReceived).toBeNull();
+    expect(skillsRow(ledger)?.verdict).toMatchObject({ why: expect.stringContaining('every description included') });
+    expect(ledger.findings.some((finding) => finding.headline.includes('name with no description'))).toBe(false);
+  });
+
+  it('takes the budget from the environment variable when that is what set it', () => {
+    const ledger = buildLedger(
+      resolveResult([], {
+        skills: onDisk,
+        plugins: [plugin('pack@market')],
+        skillListing: { budgetFraction: null, maxDescChars: null, envBudgetChars: 30_000 },
+      }),
+      measureResult([]),
+      evidence(withRecord(record({ skillListing: listing })), [usesThePack]),
+    );
+    // A budget set outright says nothing about the window, and the fraction is not the lever.
+    expect(ledger.windowTokens).toBeNull();
+    expect(ledger.listingBudget).toBeNull();
+    expect(ledger.findings[0].fix).toContain('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+  });
+
+  describe('what your agent never received', () => {
+    it('is the first finding, counted by owner, and names the skills you wrote', () => {
+      const ledger = build(record({ skillListing: listing }));
+      const [first] = ledger.findings;
+      expect(first.headline).toBe('61 of your 83 skills reach the model as a name with no description');
+      expect(first.detail).toContain('pack 60 of 80');
+      expect(first.detail).toContain('your own 1 of 2 (deploy-check)');
+      expect(first.detail).toContain('From your session of 2026-06-12');
+      expect(ledger.neverReceived).toEqual({ dropped: 61, listed: 83 });
+    });
+
+    it('does not count a skill you set to name-only as one that lost its description', () => {
+      const ledger = build(record({ skillListing: listing }));
+      // `quiet` went as a bare name because that is what its override asks for.
+      expect(ledger.findings[0].detail).not.toContain('quiet');
+    });
+
+    it('prices the way out: the smallest fraction that sends everything, and what it adds', () => {
+      const ledger = build(record({ skillListing: listing }));
+      // 60 plugin descriptions of 983 and one of yours at 384, each with its `: `, on top of 30,001.
+      expect(ledger.listingBudget).toEqual({
+        fraction: 0.03,
+        addsTokens: 14_872,
+        atLeast: false,
+        settingsPath: `${ROOT}/.claude/settings.local.json`,
+      });
+      expect(ledger.findings[0].fix).toContain('skillListingBudgetFraction to 0.03');
+      expect(ledger.findings[0].fix).toContain('14,872 more tokens on every turn');
+      expect(ledger.findings[0].fix).toContain('--restore-descriptions');
+    });
+
+    it('🚨 never puts the edit that costs tokens in the list fix runs by default', () => {
+      const ledger = build(record({ skillListing: listing }));
+      expect(ledger.findings[0].actions).toEqual([]);
+      expect(ledger.findings[0].saves).toBeNull();
+      expect(ledger.actions.some((action) => action.kind === 'listing-budget')).toBe(false);
+    });
+
+    it('says "at least" when a dropped skill is in no file and so could not be sized', () => {
+      const unseen = [...listed, sent('vendor:mystery', false, 900)];
+      const ledger = build(record({ skillListing: { ...listing, entries: unseen.length, bare: 63, skills: unseen } }));
+      expect(ledger.listingBudget?.atLeast).toBe(true);
+      expect(ledger.findings[0].fix).toContain('at least 0.03');
+      expect(ledger.findings[0].detail).toContain('yours needs at least');
+    });
+  });
+
+  describe('a server, as the session sent it', () => {
+    const sentServers = (servers: SentRecord['servers'], failedServers: string[] = []) =>
+      record({ toolList: { chars: 400, items: 20 }, servers, failedServers });
+
+    it('🚨 charges a deferred server its tool names and instructions, not the probe', () => {
+      const ledger = buildLedger(
+        resolveResult([server({ name: 'ghost' })]),
+        measureResult([measured({ name: 'ghost' })]),
+        evidence(withRecord(sentServers({ ghost: { tools: 2, nameChars: 40, instructionChars: 400, schemaChars: 0 } })), [project()]),
+      );
+      // The probe says 1,000: name plus description for each tool. The client sent 440 characters.
+      expect(ledger.rows[0].tokens).toBe(110);
+      // Once, as the server your config declares, and not again as one "no file declares".
+      expect(ledger.rows.filter((row) => row.kind === 'mcp-server')).toHaveLength(1);
+      expect(ledger.findings[0].saves).toBe(110);
+      expect(ledger.recoverable).toBe(110);
+    });
+
+    it('🚨 says nothing is recoverable from a server the session never connected', () => {
+      const ledger = buildLedger(
+        resolveResult([server({ name: 'ghost' })]),
+        measureResult([measured({ name: 'ghost' })]),
+        evidence(withRecord(sentServers({}, ['ghost'])), [project()]),
+      );
+      expect(ledger.rows[0].tokens).toBe(0);
+      expect(ledger.rows[0].verdict).toMatchObject({
+        kind: 'not-sent',
+        reason: expect.stringContaining('could not connect in your session of 2026-06-12'),
+      });
+      // What it weighs when this tool starts it is still said, because it is the price of fixing it.
+      expect(ledger.rows[0].verdict).toMatchObject({ reason: expect.stringContaining('Started here: 1,000 tokens') });
+      expect(ledger.findings).toEqual([]);
+      expect(ledger.recoverable).toBe(0);
+    });
+
+    it('keeps the probe for a server added after the session the record is from', () => {
+      const ledger = buildLedger(
+        resolveResult([
+          server({ name: 'fresh', configuredSince: { known: true, iso: '2026-07-01T00:00:00.000Z', commit: 'a', via: 'git' } }),
+        ]),
+        measureResult([measured({ name: 'fresh' })]),
+        evidence(withRecord(sentServers({})), [project()]),
+      );
+      // That session could not have sent it. Absence there is not evidence of anything.
+      expect(ledger.rows[0].tokens).toBe(1_000);
+      expect(ledger.rows[0].verdict.kind).toBe('too-new');
+    });
+
+    it('keeps the probe when the session recorded no tool list at all', () => {
+      const ledger = buildLedger(
+        resolveResult([server({ name: 'ghost' })]),
+        measureResult([measured({ name: 'ghost' })]),
+        evidence(withRecord(record({ skillListing: listing })), [project()]),
+      );
+      expect(ledger.rows[0].tokens).toBe(1_000);
+    });
+
+    it("🚨 finds a plugin server's calls under the name a transcript gives it", () => {
+      const ledger = buildLedger(
+        resolveResult(
+          [
+            server({
+              name: 'db',
+              plugin: 'kit@market',
+              scope: 'plugin',
+              fixLever: { kind: 'enabledPlugins', plugin: 'kit@market', settingsPath: `${ROOT}/.claude/settings.local.json` },
+            }),
+          ],
+          { skills: [skillOf('unused', 'kit@market', 400)], plugins: [plugin('kit@market')] },
+        ),
+        measureResult([measured({ name: 'db' })]),
+        evidence(twelveSessions, [project({ mcpServers: { plugin_kit_db: { calls: 30, sessions: 9, tools: { one: 30 } } } })]),
+      );
+      expect(ledger.rows[0].calls).toBe(30);
+      // Thirty calls means the plugin is in use, so nothing may offer to switch the whole of it off.
+      expect(ledger.actions.some((action) => action.kind === 'disable-plugin')).toBe(false);
+    });
+
+    it('gives a server no file declares a row, and a finding when it is barely used', () => {
+      const ledger = buildLedger(
+        resolveResult([]),
+        measureResult([]),
+        evidence(
+          withRecord(
+            sentServers({
+              claude_ai_Big: { tools: 70, nameChars: 4_000, instructionChars: 800, schemaChars: 0 },
+              claude_ai_Tiny: { tools: 1, nameChars: 80, instructionChars: 0, schemaChars: 0 },
+            }),
+          ),
+          [project({ mcpServers: { claude_ai_Big: { calls: 1, sessions: 1, tools: { x: 1 } } } })],
+        ),
+      );
+      const big = ledger.rows.find((row) => row.label === 'claude_ai_Big');
+      expect(big).toMatchObject({ tokens: 1_200, calls: 1, verdict: { kind: 'rarely-called', scope: 'machine', window: 'on record' } });
+      const finding = ledger.findings.find((one) => one.headline.startsWith('claude_ai_Big'));
+      expect(finding?.saves).toBe(1_200);
+      // Nothing of ours to edit, so it is handed back and never written.
+      expect(finding?.actions).toEqual([expect.objectContaining({ kind: 'manual', command: null })]);
+      // Twenty tokens is not a row. The small ones share one, and it says how many it stands for.
+      expect(ledger.rows.find((row) => row.label === '1 small connector')).toMatchObject({ tokens: 20, count: 1 });
+    });
+  });
+
+  it('itemises what Claude Code sends on its own account, out of what used to be unattributed', () => {
+    const ledger = buildLedger(
+      resolveResult([]),
+      measureResult([]),
+      evidence(
+        withRecord(
+          record({
+            builtinTools: { chars: 96_000, items: 14 },
+            systemPrompt: { chars: 12_000, items: 14 },
+            toolList: { chars: 1_600, items: 24 },
+            sessionDetails: { chars: 2_800, items: 6 },
+            hooks: { chars: 2_000, items: 2 },
+            agents: { chars: 19_200, items: 23 },
+            instructions: { chars: 24_000, files: [{ path: '/repo/CLAUDE.md', chars: 23_000 }] },
+          }),
+        ),
+        [project()],
+      ),
+    );
+    const byPart = (part: string) => ledger.rows.find((row) => row.part === part);
+    expect(byPart('tools')).toMatchObject({ kind: 'client', tokens: 24_000, count: 14, label: 'its 14 tools' });
+    expect(byPart('system-prompt')?.tokens).toBe(3_000);
+    expect(ledger.rows.find((row) => row.kind === 'hooks')?.tokens).toBe(500);
+    // The agents the client ships with are in the record and in no file.
+    expect(ledger.rows.find((row) => row.kind === 'agents')).toMatchObject({ tokens: 4_800, label: '23 agents' });
+    expect(ledger.rows.find((row) => row.kind === 'memory')).toMatchObject({ tokens: 6_000, label: '1 memory file' });
+    // 50,000 billed, 39,400 of it now has a name.
+    expect(ledger.reconciliation.unattributed).toBe(50_000 - 39_400);
+  });
+
+  it('🚨 does not let a session a script started speak for what your agent is sent', () => {
+    const scripted = record({ skillListing: { ...listing, chars: 400, listChars: 380, entries: 3, bare: 0, skills: listed.slice(0, 3).map((one) => ({ ...one, described: true })) } });
+    const sessions = twelveSessions.map((entry, index) =>
+      index === 11 ? { ...entry, headless: true, record: scripted } : index === 10 ? { ...entry, record: record({ skillListing: listing }) } : entry,
+    );
+    const ledger = build(scripted, sessions);
+    expect(ledger.source).toMatchObject({ kind: 'record', day: '2026-06-11' });
+    expect(skillsRow(ledger)?.tokens).toBe(7_522);
   });
 });

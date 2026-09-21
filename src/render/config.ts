@@ -16,6 +16,12 @@ import type { Palette } from './color.js';
 import { hangingText, screenWidth, shortPath, wrapClamped } from './layout.js';
 import type { Cell, Column, Section } from './table.js';
 import { renderTable } from './table.js';
+import {
+  SKILL_LISTING_DEFAULTS,
+  packSkillListing,
+  skillListingBudgetChars,
+  toListedSkills,
+} from '../measure/skill-listing.js';
 import type { ConfiguredSince, ResolvedConfig, ResolvedMcpServer } from '../resolve/types.js';
 
 const n = (value: number): string => value.toLocaleString('en-US');
@@ -119,18 +125,34 @@ export function renderConfig(
 
   const skills = config.skills.filter((skill) => skill.shadowedBy === null);
   const shadowed = config.skills.length - skills.length;
-  const silenced = skills.filter((skill) => skill.override === 'off' || skill.override === 'user-invocable-only');
+  // 🚨 Packed the way the client packs it, because the characters on disk are not what is sent:
+  // a long description is cut and the whole listing is capped. This screen reads no transcript, so
+  // it cannot know the window and says which one it assumed.
+  const listing = toListedSkills(config.skills, config.skillListing);
+  const packed = packSkillListing(listing, skillListingBudgetChars(config.skillListing));
+  const hidden = listing.length - packed.listed;
   line();
   line(
     `  ${colour.bold('SKILLS')}  ${colour.dim(
-      `${n(skills.length)} listed to the model` +
+      `${n(packed.listed)} listed to the model` +
         (shadowed > 0 ? ` · ${n(shadowed)} shadowed by a project copy` : '') +
-        (silenced.length > 0 ? ` · ${n(silenced.length)} hidden by skillOverrides` : ''),
+        (hidden > 0 ? ` · ${n(hidden)} hidden from the model` : ''),
     )}`,
   );
-  const listingChars = skills.reduce((sum, skill) => sum + skill.listingChars, 0);
   say(
-    `${n(listingChars)} characters of name + description. The bodies load on use and are not counted.`,
+    (packed.overBudget
+      ? `${n(packed.uncappedChars)} characters of name + description, of which about ${n(packed.chars)} are sent: ` +
+        `Claude Code caps the listing at ${n(packed.budgetChars)} characters ` +
+        `(${
+          config.skillListing.envBudgetChars !== null
+            ? 'set by SLASH_COMMAND_TOOL_CHAR_BUDGET'
+            : `its share of a ${n(SKILL_LISTING_DEFAULTS.contextWindow)}-token window, more on a larger one`
+        }) and keeps every name.`
+      : `${n(packed.chars)} characters of name + description, sent on every turn.`) +
+      ' The bodies load on use and are not counted.' +
+      // This screen reads no transcript. The main one does, and on a machine with a larger window
+      // or a plugin's worth of bundled skills the two disagree, so say which to believe.
+      (packed.overBudget ? ' Worked out from your files: the main screen reads what a session sent.' : ''),
     4,
   );
   for (const scope of ['user', 'project', 'plugin'] as const) {

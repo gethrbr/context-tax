@@ -25,6 +25,7 @@ import type { ResolveResult } from '../resolve/types.js';
 import { MAX_AGE_MS, VERSION, cacheKey, readCache, writeCache } from './cache.js';
 import { countedInstructions, probeServer, serializeTool } from './client.js';
 import { fallbackFor } from './fallback.js';
+import { packSkillListing, skillListingBudgetChars, toListedSkills } from './skill-listing.js';
 import { tokens } from './tokens.js';
 import type {
   MeasureResult,
@@ -265,7 +266,15 @@ export async function measureContext(
   };
 
   const alwaysLoaded = config.memory.filter((file) => file.alwaysLoaded);
-  const skills = listed(config.skills);
+  // 🚨 Not `listed(config.skills)`. The client caps the skill listing, so the descriptions on disk
+  // are a ceiling that most configs with a large plugin never pay. This pass has no transcripts, so
+  // it costs the listing at the default window; the ledger, which has them, re-costs it at the
+  // window your sessions prove.
+  const packedSkills = packSkillListing(
+    toListedSkills(config.skills, config.skillListing),
+    skillListingBudgetChars(config.skillListing),
+  );
+  const skills = group(packedSkills.listed, packedSkills.chars);
   const agents = listed(config.agents);
   const memory = group(alwaysLoaded.length, alwaysLoaded.reduce((sum, file) => sum + file.bytes, 0));
 
@@ -299,6 +308,20 @@ export async function measureContext(
 }
 
 export { CALIBRATION, CHARS_PER_TOKEN, PROVISIONAL_NOTE, tokens } from './tokens.js';
+export {
+  EXTENDED_CONTEXT_WINDOW,
+  SKILL_LISTING_DEFAULTS,
+  apportion,
+  inferContextWindow,
+  lineChars,
+  listingText,
+  packSkillListing,
+  savedBy,
+  skillKey,
+  skillListingBudgetChars,
+  toListedSkills,
+} from './skill-listing.js';
+export type { ListedSkill, ListingForm, PackedSkillListing } from './skill-listing.js';
 export { cacheKey } from './cache.js';
 export { probeServer, serializeTool, unsentChars, redact, SseParser, McpError } from './client.js';
 export { FALLBACK_TABLE, fallbackFor, packageOf } from './fallback.js';

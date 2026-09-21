@@ -156,6 +156,18 @@ describe('scanEvidence', () => {
     expect(evidence.projects[0].coldStart?.median).toBe(12_345);
   });
 
+  it('records the most one turn carried, which is the only proof of the window a session ran in', async () => {
+    const evidence = await scanFixture({
+      a: [
+        assistant([], { cacheCreation: 60_000 }),
+        assistant([], { cacheRead: 300_000, input: 12_000 }),
+        assistant([], { cacheRead: 90_000 }),
+      ],
+    });
+
+    expect(evidence.sessions[0].peakContextTokens).toBe(312_000);
+  });
+
   it('reports no cold start at all when every turn was a cache hit, rather than guessing one', async () => {
     const evidence = await scanFixture({ a: [assistant([], { cacheRead: 40_000 })] });
 

@@ -98,6 +98,23 @@ describe('parseArgs', () => {
     expect(args.usageErrors).toEqual(['one command at a time, got "measure", "fix".']);
   });
 
+  it('takes a session id after `session`, and only there', () => {
+    expect(parseArgs(['session', '4f2a', '--svg', 'out.svg'])).toMatchObject({
+      command: 'session',
+      sessionId: '4f2a',
+      svg: 'out.svg',
+      usageErrors: [],
+    });
+    // Anywhere else a second word is still two commands.
+    expect(parseArgs(['receipt', '4f2a']).usageErrors).toEqual(['one command at a time, got "receipt", "4f2a".']);
+    expect(parseArgs(['session', 'a', 'b']).usageErrors).toHaveLength(1);
+  });
+
+  it('🚨 leaves the edit that costs tokens off unless it is asked for by name', () => {
+    expect(parseArgs(['fix', '--yes']).restoreDescriptions).toBe(false);
+    expect(parseArgs(['fix', '--restore-descriptions']).restoreDescriptions).toBe(true);
+  });
+
   it('reads the boolean flags', () => {
     const args = parseArgs(['fix', '--json', '--no-color', '--no-spawn', '--refresh', '--dry-run', '-y']);
     expect(args).toMatchObject({

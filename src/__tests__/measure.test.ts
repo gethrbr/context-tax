@@ -88,6 +88,7 @@ function resolved(servers: ResolvedMcpServer[], launch: Map<string, McpLaunchSpe
     sources: [],
     mcpServers: servers,
     skills: [],
+    skillListing: { budgetFraction: null, maxDescChars: null, envBudgetChars: null },
     agents: [],
     commands: [],
     memory: [],

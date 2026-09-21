@@ -119,12 +119,13 @@ export async function resolveSkills(
       skills.push({
         name,
         description,
+        whenToUse: frontmatter.fields.when_to_use ?? null,
+        modelInvocable: frontmatter.fields['disable-model-invocation'] !== 'true',
         scope: root.scope,
         path,
         plugin: root.plugin,
-        // `name: description`, which is the listing line. Approximate by construction and stated
-        // as such — the exact rendering belongs to Claude Code, and §4.1 calibrates it against
-        // `/context` rather than asserting it here.
+        // `name: description` as it sits on disk. What the model is actually sent is smaller and
+        // is worked out in `measure/skill-listing.ts`, which is the only place a skill is costed.
         listingChars: name.length + 2 + description.length,
         shadowedBy: null,
         override: settings.skillOverrides.get(name)?.value ?? null,

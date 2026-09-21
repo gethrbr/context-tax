@@ -122,16 +122,36 @@ export type SkillOverride = 'on' | 'name-only' | 'user-invocable-only' | 'off';
 
 export type ItemScope = 'user' | 'project' | 'plugin';
 
+/**
+ * What the settings chain and the environment say about the size of the skill listing. `null`
+ * means not set, which is the usual case, and the client's default applies.
+ */
+export interface SkillListingSettings {
+  /** `skillListingBudgetFraction`: the share of the context window the listing may take. */
+  budgetFraction: number | null;
+  /** `skillListingMaxDescChars`: where one skill's description is cut. */
+  maxDescChars: number | null;
+  /** `SLASH_COMMAND_TOOL_CHAR_BUDGET`, which replaces the computed budget outright. */
+  envBudgetChars: number | null;
+}
+
 export interface ResolvedSkill {
   name: string;
   description: string;
+  /** Frontmatter `when_to_use`, which the client appends to the description in the listing. */
+  whenToUse: string | null;
+  /** `false` for `disable-model-invocation: true`: the model is never told the skill exists. */
+  modelInvocable: boolean;
   scope: ItemScope;
   path: string;
   plugin: string | null;
   /**
-   * Characters of `name: description`, which is what a listing line costs. **The body is
-   * deliberately excluded** — it loads when the skill runs, so counting it would be this tool's
-   * first lie and the most tempting one, because it is the bigger number.
+   * Characters of `name: description` **as written on disk**. The body is deliberately excluded:
+   * it loads when the skill runs, so counting it would be this tool's first lie and the most
+   * tempting one, because it is the bigger number.
+   *
+   * 🚨 This is not what the model is sent. The client cuts a long description and caps the whole
+   * listing, so the cost is worked out in `measure/skill-listing.ts` and never read from here.
    */
   listingChars: number;
   /** Set when a higher-precedence entry of the same name wins. Project beats user. */
@@ -212,6 +232,8 @@ export interface ResolvedConfig {
   sources: ConfigSource[];
   mcpServers: ResolvedMcpServer[];
   skills: ResolvedSkill[];
+  /** Anything the user set about the size of the skill listing. */
+  skillListing: SkillListingSettings;
   agents: ResolvedAgent[];
   commands: ResolvedCommand[];
   memory: MemoryFile[];

@@ -107,8 +107,11 @@ export async function planFixes(actions: FixAction[], options: PlanOptions = {})
   const saves = edits
     .flatMap((edit) => edit.actions)
     .reduce((sum, action) => sum + (action.saves ?? 0), 0);
+  const adds = edits
+    .flatMap((edit) => edit.actions)
+    .reduce((sum, action) => sum + (action.kind === 'listing-budget' ? action.adds : 0), 0);
 
-  return { edits, manual, alreadyApplied, saves, problems };
+  return { edits, manual, alreadyApplied, saves, adds, problems };
 }
 
 /** `editSettings` returns bare `FileAction`s, which carry enough to be identified. */
