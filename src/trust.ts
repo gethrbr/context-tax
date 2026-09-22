@@ -3,7 +3,7 @@
  *
  * 🚨 **This is a security boundary, and it is a separate module for the same reason `args.ts` is:**
  * `index.ts` dispatches at module scope, so a decision that lives there cannot be called from a
- * test. The rule below was wrong for a release and no test could have caught it, because there was
+ * test. The rule below was once wrong and no test could have caught it, because there was
  * nothing importable to point a test at.
  *
  * Starting a project server runs whatever command that repo's `.mcp.json` names. Standing in the

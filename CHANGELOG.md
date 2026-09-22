@@ -4,6 +4,106 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+An audit of the published package, run against fabricated machines that look nothing like the one
+it was built on. Nothing here changes what the tool is for; everything here is a way it could have
+been wrong, rude, or loud on somebody else's machine.
+
+### Fixed
+
+- 🚨 **An MCP server whose `url` is not a URL no longer ends every report with a stack trace.** A
+  `${API_BASE}` the environment did not fill, an empty `url`, or a host with no scheme made the
+  measuring step throw `TypeError: Invalid URL` out of the whole run. It is now a row that says the
+  URL could not be parsed, naming the placeholder that was not set, never the URL itself.
+
+- 🚨 **`${VAR}` and `${VAR:-default}` in a server definition are filled in**, in `command`, `args`,
+  `env`, `url` and `headers`, the way Claude Code fills them before it starts the server. Such a
+  server used to be probed with the placeholder left in and reported as one that could not start.
+
+- 🚨 **A small skill listing with one bare name no longer proves a window.** A 465-character list
+  with a skill the tool could not size was read as a list pinned against its budget, which derived
+  "a window of about 12,000" and put "292% of a window" on the first line and on the receipt. The
+  smallest window the client runs is 200,000 tokens, so a list under that window's share of the
+  budget was never cut, and its bare names are skills with nothing to say.
+
+- 🚨 **The first-request number is the first billed request.** The rule was "the first request
+  that read nothing from cache", which skipped every session whose first call was a cache hit and,
+  when the cache expired mid-session, took a turn carrying the whole conversation as the session's
+  opening size, at two to five times the truth. The usage total of the first call is the whole
+  prompt whether the cache served it or not, so that is the number now. On the machine this was
+  found on, the ten-session median moved by 0.2%. The screen says *first request* where it said
+  *cold start*.
+
+- 🔒 **A URL is printed as its scheme and host.** The path was kept, and hosted MCP gateways put
+  the secret in the path, so `config --json` could carry it. A server started as its own executable
+  no longer has its first argument printed as the entry either, since that can be a token; only
+  what a runner (`npx`, `uvx`, `node`, ...) was told to run is shown.
+
+- 🔒 **A failing server's echo is scrubbed of its arguments too**, not only of its `env` and
+  header values. `npx mcp-remote <url> --header "Authorization: Bearer …"` is a common shape, and a
+  launcher that fails prints its own argv to stderr, which becomes the row's reason on screen.
+
+- 🔒 **A malformed settings or `.mcp.json` file is reported by position**, not by quoting the ten
+  characters around the bad token, which in a settings file are as likely as not beside a key.
+
+- 🔒 **A failed remote probe never quotes the URL back.** Node's `fetch` refuses a URL that carries
+  credentials by printing the whole URL in its error; that message now carries the scheme and host.
+
+- **`session --svg` into a directory that does not exist is an error message**, not an uncaught
+  `ENOENT` with a stack trace. `--svg` with `--json` says it is ignored.
+
+- **`fix --yes` into a `.claude/` it cannot write is one sentence**, naming the file and the reason
+  in words, and it happens before anything is copied: the new text is written beside the target
+  first, then the backup, then the rename, so a read-only directory leaves no stray backup and no
+  temp file. When a later file fails, the ones already written are reported as written, with their
+  backups. It was an uncaught `EACCES` with a stack trace, after the backup had been made.
+
+- **The receipt says so when its rows sum past the total, and exits 1 like the main screen.** A
+  listing read from a session newer than the ones the total is billed from can outrun it; the main
+  screen refused that sum in red and the receipt, the screen built to be shared, printed the rows
+  and the smaller total, said nothing, and exited 0.
+
+- **A settings file that starts with a byte-order mark is read.** JSON.parse rejects the mark a
+  Windows editor leaves, and rejecting the file dropped every server it declared from every view.
+
+- **`--top` and `--window` are whole numbers, and `--cwd` cannot be empty.** `--window 0.5` was
+  accepted and drew an empty window over a machine with a real first request; `--cwd ""` matched
+  every session on the machine under a blank title. A sub-second `--timeout` now says
+  `within 250ms`, not `within 0s`.
+
+- Grammar: `evidence` said "1 sessions" and "1 malformed lines", `config` said "a file under them
+  are touched", and a session with no timestamp printed the window as " to 2026-09-10".
+
+- **The MCP handshake introduces this tool with its real version.** `clientInfo` said `0.1.0` on
+  every install since 0.1.0; it now reads the manifest, the same as `--version`.
+
+- **The report, `receipt` and `fix` say what they started.** `measure` always listed the hosts it
+  contacted; the commands everyone actually runs started the same servers and named nothing. On a
+  terminal they now leave one line under the spinner: what was started, and which hosts were
+  contacted, or that it was nothing.
+
+- The receipt's `PAID` block is `SO FAR`: it sits over turns and over tokens carried, and only the
+  first of those was paid for as such.
+
+### Documentation
+
+- The `fix` screens in the README were hand-written and had drifted: the diff header, every
+  sentence under an action, and a backup path of a shape the tool never writes. They are generated
+  from a fixture and pinned by a test now, like the other screens, and the diff shows what a rewrite
+  does to an inline array. The README's `linear` example carries the unknown-age caveat the code
+  prints for a `~/.claude.json` server.
+- "`fix` is the only part of this package that writes" was false as written: `session --svg`
+  writes the file you name, and every measuring command writes the schema cache. It now says
+  "the only command that writes to your settings", in the README and in `--help`.
+- The library example did not typecheck (`measureContext` takes no `cwd`), and it now says that
+  the "not from a directory you are not standing in" rule is the CLI's, with `trustProjectServers`
+  as the library's switch.
+- Two README links pointed at files that are not in the tarball and 404 on npmjs.com.
+- Comments that ship in `dist/` no longer refer to a private plan by section number, name the
+  machine the tool was built on or its plugins, cite a flag that does not exist, or call the
+  tokenizer ratio provisional when it was measured within 4%.
+
 ## 0.4.0
 
 **The rows are read, not modelled.** A recent Claude Code writes what it sent into the session

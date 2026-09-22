@@ -1,11 +1,10 @@
 /**
  * Characters to tokens.
  *
- * ⚠️ **PROVISIONAL, and the output says so on every screen that uses it.** `chars / 4` is tuned
- * for English prose. JSON schemas are not prose — quotes, braces, colons and camelCase all
- * fragment into extra tokens — so this ratio is expected to *understate* the single most important
- * number in the ledger. That is the wrong direction to be wrong in, and it is why no dollar figure
- * is printed until `CALIBRATION` below is settled.
+ * 🔑 `chars / 4` is tuned for English prose, and JSON schemas are not prose: quotes, braces,
+ * colons and camelCase all fragment into extra tokens, so the ratio could have understated the
+ * largest number in the ledger. It was checked by execution instead of assumed. `CALIBRATION`
+ * below holds the measurement, and it landed within 4%.
  *
  * 🔑 The ratio is **pre-registered**, not fitted. The prediction was written down before the
  * measurement, and `__tests__/measure.test.ts` pins it. Change the constant and that test fails,
@@ -51,7 +50,7 @@ export const CHARS_PER_TOKEN = 4;
  * interactive prompts are not assembled identically, and the per-server number in an interactive
  * session is the higher one.
  *
- * Full workings, including what a dead API key ruled out: `docs/context-tax/CONTEXT_TAX_PLAN.md` §15.
+ * The numbers are in `CALIBRATION` below, and `__tests__/measure.test.ts` pins them.
  */
 export const CALIBRATION = {
   status: 'measured-against-a-deferring-client',

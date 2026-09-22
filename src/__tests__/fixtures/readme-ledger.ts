@@ -108,13 +108,15 @@ export function readmeLedger(): Ledger {
         perCall: 4_290_000,
         basis: null,
         // Machine-scoped, because `claude mcp remove -s user` is machine-wide and a project's
-        // silence can never justify a command that reaches every project.
+        // silence can never justify a command that reaches every project. And `on record`, not
+        // `since it was configured`: a `~/.claude.json` server has no git history to date it by,
+        // and the ledger says so rather than pretending to know.
         verdict: {
           kind: 'rarely-called',
           calls: 3,
           sessions: SESSIONS,
           perCall: 4_290_000,
-          window: 'since it was configured',
+          window: 'on record',
           scope: 'machine',
         },
         fix: 'claude mcp remove linear -s user',
@@ -300,8 +302,9 @@ export function readmeLedger(): Ledger {
         headline: `linear is loaded on every turn and used in 3 of ${SESSIONS} sessions on this machine`,
         detail:
           `300 tokens re-sent across ${TURNS.toLocaleString('en-US')} turns for 3 calls: 4,290,000 ` +
-          'tokens of standing cost per use. Loading its schemas costs 2,540 tokens more, every time ' +
-          'something does.',
+          'tokens of standing cost per use, counted over every session on record because nothing says ' +
+          'when this was added, so read it as an upper bound. Loading its schemas costs 2,540 tokens ' +
+          'more, every time something does.',
         saves: 300,
         fix: 'claude mcp remove linear -s user',
         actions: [],
@@ -330,7 +333,7 @@ export function readmeLedger(): Ledger {
         headline: '13 skills never invoked, either way',
         // The real ledger opens with this whenever a listing dropped descriptions, and this one did.
         detail:
-          'The listing is over its budget, so most of what this frees goes to another description rather than out of the prompt. changelog-writer, commit-helper, design-review, ...',
+          'The listing is over its budget, so most of what this frees goes to another description rather than out of the prompt. changelog-writer, commit-helper, db-migrate, ...',
         saves: null,
         fix: 'set each to off in skillOverrides, or delete the ones you do not recognise',
         actions: [],

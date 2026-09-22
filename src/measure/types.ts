@@ -2,8 +2,8 @@
  * What a line item costs.
  *
  * The one rule this file exists to enforce: **`0` and "we could not find out" are different
- * answers, and only one of them is a number.** Tavily returned an empty body on `initialize`
- * during research; a measurer that wrote `0` there would have reported a paid-for server as free
+ * answers, and only one of them is a number.** One public server returned an empty body on
+ * `initialize` during research; a measurer that wrote `0` there would have reported a paid-for server as free
  * dead weight and recommended keeping it. So every cost is `number | null`, and `null` always
  * arrives with a `status` that says why.
  */
@@ -33,7 +33,7 @@ export type UnmeasuredCause = 'failed' | 'declined';
 
 export interface MeasuredTool {
   name: string;
-  /** Serialized characters, see `serializeTool`. Per-tool because M4 joins this against calls. */
+  /** Serialized characters, see `serializeTool`. Per-tool because the ledger joins this against calls. */
   chars: number;
   /**
    * Name plus description: what a deferred tool weighs while it sits in the listing, unloaded.

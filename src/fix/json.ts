@@ -14,6 +14,7 @@
  */
 
 import type { FileAction } from './types.js';
+import { jsonFault } from '../resolve/read.js';
 
 export class FixError extends Error {}
 
@@ -111,7 +112,7 @@ export function editSettings(before: string | null, actions: FileAction[]): Edit
     try {
       parsed = JSON.parse(before);
     } catch (error) {
-      throw new FixError(`it is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+      throw new FixError(`it is ${jsonFault(error)}`);
     }
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new FixError('its top level is not a JSON object');

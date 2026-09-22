@@ -252,11 +252,13 @@ async function scanFile(
         if (kind === 'subagent' || record.isSidechain === true) acc.session.sidechainTurns += 1;
         // A subagent runs its own model and its own window, so its turns prove nothing about this one.
         else acc.session.peakContextTokens = Math.max(acc.session.peakContextTokens, total);
-        // A request that read nothing from cache carried the whole prompt, so its total IS the
-        // fixed prefix plus the first user message. Later turns cannot tell us that.
-        if (cacheRead === 0 && acc.session.coldStartTokens === null) {
-          acc.session.coldStartTokens = total;
-        }
+        // 🚨 The first billed request, whatever the cache did with it. Its total (input, cache
+        // writes and cache reads together) is the whole prompt: the fixed prefix plus the first
+        // user message, and a cache hit changes what it cost, not what it was. The rule used to be
+        // "the first request that read nothing from cache", which skipped every session whose
+        // first call was warm (72 of 252 on one machine) and, when the cache expired mid-session,
+        // took a turn carrying the whole conversation as the session's opening size, at 2x to 5x.
+        if (acc.session.turns === 1) acc.session.coldStartTokens = total;
       }
     }
 
@@ -300,7 +302,7 @@ function mergeSession(
   const { session } = acc;
   // 🔑 A subagent's turns are billed and its tool calls are real usage, so both count. But it is
   // not a session a human started, and its prefix is a different one — folding it into the session
-  // count would inflate it, and into the cold-start median would bias the number the whole ledger
+  // count would inflate it, and into the first-request median would bias the number the whole ledger
   // is built on.
   if (kind === 'session') {
     project.sessions += 1;

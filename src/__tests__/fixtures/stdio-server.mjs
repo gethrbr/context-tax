@@ -18,6 +18,8 @@
  *   noisy     a line of plain-text logging on stdout before every response
  *   crash     exits 1 with a message on stderr, like a package that does not exist
  *   hang      accepts the connection and never answers
+ *   echo      the same as `ok`, with the client's own `clientInfo` quoted back as the instructions,
+ *             so a test can see what the handshake told the server
  */
 
 import { writeFileSync } from 'node:fs';
@@ -76,7 +78,12 @@ process.stdin.on('data', (chunk) => {
           protocolVersion: '2025-06-18',
           capabilities: { tools: {} },
           serverInfo: { name: 'fixture', version: '1.0.0' },
-          instructions: mode === 'verbose' ? LONG_INSTRUCTIONS : INSTRUCTIONS,
+          instructions:
+            mode === 'verbose'
+              ? LONG_INSTRUCTIONS
+              : mode === 'echo'
+                ? `clientInfo ${JSON.stringify(request.params?.clientInfo ?? null)}`
+                : INSTRUCTIONS,
         },
       });
       continue;

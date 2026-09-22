@@ -55,7 +55,7 @@ export function packageOf(entry: string): string {
 
 export function fallbackFor(spec: McpLaunchSpec): FallbackEntry | null {
   if (spec.transport === 'stdio') {
-    const entry = entryArgument(spec.args);
+    const entry = entryArgument(spec.command, spec.args);
     if (entry === null) return null;
     const name = packageOf(entry);
     return FALLBACK_TABLE.find((row) => row.id === name) ?? null;

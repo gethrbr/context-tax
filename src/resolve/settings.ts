@@ -37,9 +37,9 @@ export interface EffectiveSettings {
   enabledPlugins: Map<string, { enabled: boolean; from: string }>;
   enabledMcpjsonServers: Set<string>;
   disabledMcpjsonServers: Set<string>;
-  /** Skill name -> override, and the file that set it, which is where `--fix` writes. */
+  /** Skill name -> override, and the file that set it, which is where `fix` writes. */
   skillOverrides: Map<string, { value: SkillOverride; from: string }>;
-  /** Where a `--fix` should write a new `skillOverrides` entry. */
+  /** Where a `fix` should write a new `skillOverrides` entry. */
   skillOverridesTarget: string;
   skillListing: SkillListingSettings;
 }
@@ -92,7 +92,7 @@ export interface MergedSettings {
  * disables the server here, rather than being replaced by a higher layer's list. That is the
  * conservative direction and it is chosen on purpose: under-counting a server pushes its cost into
  * the visible `unattributed` row, while over-counting invents a row that can push the ledger past
- * the exact billed total — which §4 says must fail loudly. Erring toward the labelled remainder is
+ * the exact billed total — which must fail loudly. Erring toward the labelled remainder is
  * the only one of the two that stays honest on its own.
  */
 export async function mergeSettings(

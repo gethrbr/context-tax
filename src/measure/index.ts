@@ -21,6 +21,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { safeUrl } from '../resolve/read.js';
 import type { ResolveResult } from '../resolve/types.js';
 import { MAX_AGE_MS, VERSION, cacheKey, readCache, writeCache } from './cache.js';
 import { countedInstructions, probeServer, serializeTool } from './client.js';
@@ -66,6 +67,13 @@ export interface MeasureOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+/** ` (${API_BASE} is not set)` when a placeholder survived expansion; names only, never values. */
+function unfilled(url: string): string {
+  const names = [...url.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1]);
+  if (names.length === 0) return '';
+  return ` (${names.map((name) => `\${${name}}`).join(', ')} ${names.length === 1 ? 'is' : 'are'} not set)`;
+}
 
 export function defaultCacheDir(home: string = homedir()): string {
   return join(home, '.cache', 'context-tax', 'schemas');
@@ -196,6 +204,14 @@ export async function measureContext(
       return declined('declared by a .mcp.json outside the working directory, so it was not run');
     }
 
+    // 🚨 Decided before the probe starts, because a thrown `new URL` used to escape the `try`
+    // below, reject the whole `Promise.all`, and end every report with a stack trace. A `${VAR}`
+    // the environment did not fill, `"url": ""` and a host with no scheme all land here. The URL
+    // itself is never printed: it is the one string most likely to be carrying a token.
+    if (spec.transport !== 'stdio' && spec.url !== null && safeUrl(spec.url) === null) {
+      return unmeasured(server.name, `its url is not a valid URL${unfilled(spec.url)}, so it was not started`, 'failed');
+    }
+
     const shared = inFlight.get(key);
     if (shared !== undefined) return { ...(await shared), name: server.name };
 
@@ -239,11 +255,13 @@ export async function measureContext(
         // measurement of somebody else's working copy, while the `cannot start` finding and the
         // spawn error behind it were both dropped. Whether a broken server was reported at all
         // depended on whether its package happened to be one of five in a table.
-        return unmeasured(
-          server.name,
-          error instanceof Error ? error.message : String(error),
-          'failed',
-        );
+        // 🔒 The message is the server's or the runtime's, and the runtime can quote what it was
+        // given: Node's fetch refuses a URL with credentials by printing the whole URL. The raw
+        // URL is swapped for its scheme and host. What the server itself echoes is scrubbed of
+        // every value it was handed before it gets here, in `client.ts`.
+        const raw = error instanceof Error ? error.message : String(error);
+        const named = spec.url === null ? raw : raw.split(spec.url).join(safeUrl(spec.url) ?? '[url]');
+        return unmeasured(server.name, named, 'failed');
       } finally {
         // In `finally` so a server that times out or throws still clears itself from the label.
         // A spinner that keeps naming a server which gave up ten seconds ago is worse than none.

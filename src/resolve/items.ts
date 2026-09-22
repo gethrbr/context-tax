@@ -1,10 +1,10 @@
 /**
  * Skills, agents and slash commands: the three things that get listed to the model by name.
  *
- * 🔑 **A skill is a directory holding a `SKILL.md` with frontmatter, not a markdown file.** On this
- * machine `~/.claude/skills` holds 30 bare `.md` notes beside 3 real skills, so counting files
- * would have reported 33 where the truth is 3 — and the plan's own §1 quotes "33+ registered"
- * because it was arrived at that way. Frontmatter is the membership test.
+ * 🔑 **A skill is a directory holding a `SKILL.md` with frontmatter, not a markdown file.** A
+ * `~/.claude/skills` that holds 30 bare `.md` notes beside 3 real skills would count as 33 where
+ * the truth is 3, and an early draft of this tool did exactly that. Frontmatter is the membership
+ * test.
  *
  * 🔑 **Only the listing line is costed.** `name` and `description` enter the system prompt; the
  * body loads when the skill runs. Counting the body would be this tool's first lie and the most
@@ -64,8 +64,8 @@ async function readText(path: string, problems: Problem[]): Promise<string | nul
  * Apply shadowing across scopes.
  *
  * Plugin items live in their own namespace — they are addressed `plugin:name` — so they never
- * shadow and are never shadowed. User and project share one namespace, and project wins: this
- * machine has `apple-design` in both, which a naive union would have counted twice.
+ * shadow and are never shadowed. User and project share one namespace, and project wins: a
+ * `design-kit` present in both is one skill, which a naive union would have counted twice.
  */
 function markShadowed<T extends { name: string; scope: ItemScope; shadowedBy: ItemScope | null }>(
   items: T[],

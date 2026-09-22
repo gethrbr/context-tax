@@ -97,7 +97,7 @@ export function renderReceipt(ledger: Ledger, colour: Palette, today: string): s
   if (total === null) {
     const measured = items.reduce((sum, item) => sum + item.tokens, 0);
     out.push(pair('MEASURED HERE', n(measured), colour.bold));
-    out.push(`  ${colour.dim('no session here recorded a cold start,')}`);
+    out.push(`  ${colour.dim('no session here was billed a first request,')}`);
     out.push(`  ${colour.dim('so there is no billed total to set it against')}`);
   } else {
     out.push(pair('TOTAL PER TURN', n(total), colour.bold));
@@ -105,11 +105,17 @@ export function renderReceipt(ledger: Ledger, colour: Palette, today: string): s
       const share = Math.max(1, Math.round((total / ledger.windowTokens) * 100));
       out.push(`  ${colour.dim(`${share}% of a window of about ${n(ledger.windowTokens)} tokens`)}`);
     }
+    if (overAttributed) {
+      // The main screen refuses this sum in red. A receipt that printed rows past its own total
+      // and said nothing would be the one screen built to be shared, sharing a contradiction.
+      out.push(`  ${colour.yellow('rows sum past the total: the config grew after')}`);
+      out.push(`  ${colour.yellow('the sessions billed, or a row over-counts')}`);
+    }
   }
   out.push(`  ${rule}`);
 
   if (ledger.machine.turns > 0) {
-    out.push(pair('PAID', `${n(ledger.machine.turns)} turns`));
+    out.push(pair('SO FAR', `${n(ledger.machine.turns)} turns`));
     out.push(pair('', `${compact(ledger.machine.contextTokens)} tokens carried`, colour.dim));
   }
   if (ledger.recoverable > 0) out.push(pair('RECOVERABLE PER TURN', n(ledger.recoverable), colour.green));

@@ -1,8 +1,8 @@
 /**
  * Which plugins are actually on, and where their files are.
  *
- * 🔑 **Installed is not enabled, and the gap is large.** This machine has `superpowers` installed
- * with 14 skills and absent from every `enabledPlugins` map, so a resolver that walked the plugin
+ * 🔑 **Installed is not enabled, and the gap is large.** A plugin can sit in the cache with 14
+ * skills and be absent from every `enabledPlugins` map, so a resolver that walked the plugin
  * cache would report 14 skills that reach no session. The registry below decides membership;
  * the directory only supplies the contents.
  *
@@ -49,7 +49,7 @@ function installations(value: unknown): Installation[] {
 /**
  * Pick the installation that applies to `cwd`.
  *
- * A plugin can be installed several times over — this machine has `feature-dev` at both user and
+ * A plugin can be installed several times over — the same plugin can sit at both user and
  * project scope pointing at different marketplaces. The one whose `projectPath` contains `cwd`
  * wins; failing that, the user-scoped copy; failing that, the first recorded. Ambiguity resolves
  * toward the more specific claim, the same direction the settings chain resolves in.

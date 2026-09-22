@@ -8,8 +8,10 @@
  * 1. A corrupt line is **counted, not thrown**. Transcripts are appended to by a live process and
  *    can be truncated mid-write; one bad line aborting a scan over 900 files would make the tool
  *    unusable exactly when a session is running.
- * 2. Cold start is only a cold start when **nothing came from cache**. Taking the first turn
- *    unconditionally would report a cache hit as the prompt size and understate the prefix.
+ * 2. The opening size is the **first billed request, warm or cold**. Its usage total is the whole
+ *    prompt either way; a cache hit changes what it cost, not what it was. Waiting for a request
+ *    that read nothing from cache skipped every session that opened warm and, when the cache
+ *    expired mid-session, reported a turn carrying the whole conversation as the opening size.
  * 3. Model-invoked and user-typed skills are **different numbers**, because they map to different
  *    `skillOverrides` states and conflating them would recommend deleting a skill that is used.
  * 4. A session with no recorded `cwd` **joins no project**, rather than joining the wrong one.
@@ -147,13 +149,36 @@ describe('scanEvidence', () => {
     expect(evidence.projects[0].builtinTools.Bash).toBe(1);
   });
 
-  it('takes cold start from the first turn that read NOTHING from cache', async () => {
+  it('🚨 takes the opening size from the first billed request, even when the cache served it', async () => {
     const evidence = await scanFixture({
-      // A resumed session: its first turn is a cache hit, so it is not a cold start.
-      a: [assistant([], { cacheRead: 40_000 }), assistant([], { cacheCreation: 12_345 })],
+      // The first call was a cache hit: another session had just sent the same prefix. The
+      // prompt was still 40,012 tokens, and the later cache miss is a mid-session turn.
+      a: [assistant([], { cacheRead: 40_000, input: 12 }), assistant([], { cacheCreation: 12_345 })],
     });
 
-    expect(evidence.projects[0].coldStart?.median).toBe(12_345);
+    expect(evidence.projects[0].coldStart?.median).toBe(40_012);
+  });
+
+  it('🚨 never takes a later cache miss as the opening size', async () => {
+    const evidence = await scanFixture({
+      a: [
+        assistant([], { cacheRead: 40_000 }),
+        assistant([], { cacheRead: 40_000, input: 9_000 }),
+        // The cache expired: this turn carries the whole conversation and reads nothing.
+        assistant([], { cacheCreation: 250_000 }),
+      ],
+    });
+
+    expect(evidence.sessions[0].coldStartTokens).toBe(40_000);
+  });
+
+  it('skips a reply the API billed nothing for, so an error line is not the opening', async () => {
+    const evidence = await scanFixture({
+      a: [assistant([], {}), assistant([], { cacheCreation: 50_000 })],
+    });
+
+    expect(evidence.sessions[0].coldStartTokens).toBe(50_000);
+    expect(evidence.sessions[0].turns).toBe(1);
   });
 
   it('records the most one turn carried, which is the only proof of the window a session ran in', async () => {
@@ -168,10 +193,10 @@ describe('scanEvidence', () => {
     expect(evidence.sessions[0].peakContextTokens).toBe(312_000);
   });
 
-  it('reports no cold start at all when every turn was a cache hit, rather than guessing one', async () => {
+  it('a session whose only turn was a cache hit still has an opening size', async () => {
     const evidence = await scanFixture({ a: [assistant([], { cacheRead: 40_000 })] });
 
-    expect(evidence.projects[0].coldStart).toBeNull();
+    expect(evidence.projects[0].coldStart?.median).toBe(40_000);
     expect(evidence.projects[0].turns).toBe(1);
   });
 

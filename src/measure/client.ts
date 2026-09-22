@@ -1,9 +1,9 @@
 /**
  * A minimal MCP client that asks one question: `tools/list`.
  *
- * It speaks all three transports because this machine runs all three — `analytics` over stdio,
- * `acme` over streamable HTTP, `context7` over legacy SSE — and a measurer that could only see
- * one of them would silently under-report two thirds of the servers it found.
+ * It speaks all three transports, stdio, streamable HTTP and legacy SSE, because one config
+ * routinely holds all three, and a measurer that could only see one of them would silently
+ * under-report the servers it found.
  *
  * 🔒 Three rules hold this file to the promise on the README:
  *
@@ -20,11 +20,13 @@
 
 import { spawn } from 'node:child_process';
 
+import { entryArgument } from '../resolve/read.js';
 import type { McpLaunchSpec, McpTransport } from '../resolve/types.js';
+import { PACKAGE_VERSION } from '../version.js';
 
 /** The revision that introduced the `MCP-Protocol-Version` header. Servers negotiate down. */
 const PROTOCOL_VERSION = '2025-06-18';
-const CLIENT_INFO = { name: 'context-tax', version: '0.1.0' };
+const CLIENT_INFO = { name: 'context-tax', version: PACKAGE_VERSION };
 
 /** A page of tools is ~50; twenty pages is a runaway server, not a big one. */
 const MAX_PAGES = 20;
@@ -44,8 +46,7 @@ export interface RawTool {
  * Everything a server puts in the prefix, which is **not** just its tools.
  *
  * 🔴 `instructions` is returned by `initialize` and Claude Code injects it into the system prompt
- * verbatim, under a "MCP Server Instructions" heading. It was missing from the plan's measurement
- * recipe and it is not small: acme ships 4,374 characters of it, 36% on top of its 12,183
+ * verbatim, under a "MCP Server Instructions" heading. It is easy to miss and it is not small: acme ships 4,374 characters of it, 36% on top of its 12,183
  * characters of schemas. A measurer that counted only `tools/list` would have under-reported the
  * largest line item in the ledger by more than a third, and would have done it silently.
  *
@@ -90,7 +91,7 @@ export function serializeTool(tool: RawTool): number {
  * The gap is not small. `@playwright/mcp` serializes to 18,477 characters whole and 15,896 as the
  * three fields the API takes. Counting the wrong one is a 16% error on one of the biggest rows,
  * so the difference is carried here instead of being quietly resolved in one direction, and
- * `/context` calibration is what settles it.
+ * the calibration in `tokens.ts` is what settles it.
  */
 export function unsentChars(tools: RawTool[]): number {
   return tools.reduce((sum, tool) => sum + Math.max(0, tool.rawChars - serializeTool(tool)), 0);
@@ -153,11 +154,18 @@ function toolsFrom(result: Record<string, unknown>): { tools: RawTool[]; cursor:
 /**
  * Remove every value we handed the server from text the server handed back.
  *
+ * Env values, header values, and the arguments too: `npx mcp-remote <url> --header
+ * "Authorization: Bearer …"` is a common shape, and a launcher that fails echoes its argv to
+ * stderr, which becomes the row's reason on the main screen. The package or script a runner was
+ * told to run is the one argument left alone, so a "cannot find package" stays readable.
+ *
  * Short values are left alone: a two-character env value matches everywhere and redacting it would
  * shred the diagnostic without protecting anything that was secret to begin with.
  */
 export function secretsOf(spec: McpLaunchSpec): string[] {
-  return [...Object.values(spec.env), ...Object.values(spec.headers)];
+  const entry = entryArgument(spec.command, spec.args);
+  const args = spec.args.filter((arg) => arg !== entry && !arg.startsWith('-'));
+  return [...Object.values(spec.env), ...Object.values(spec.headers), ...args];
 }
 
 export function redact(text: string, secrets: string[]): string {
@@ -265,7 +273,7 @@ async function stdioProbe(spec: McpLaunchSpec, timeoutMs: number): Promise<Probe
   });
 
   const timer = setTimeout(() => {
-    failAll(new McpError(`no response within ${Math.round(timeoutMs / 1000)}s`));
+    failAll(new McpError(`no response within ${timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)}s`}`));
     stop();
   }, timeoutMs);
 
@@ -369,7 +377,7 @@ async function* streamText(body: ReadableStream<Uint8Array>): AsyncGenerator<str
 /**
  * A failed request, with the server's own explanation attached.
  *
- * `HTTP 400 Bad Request` is not a diagnosis. The body behind one of these on this machine said
+ * `HTTP 400 Bad Request` is not a diagnosis. The body behind one of these, from a public server, said
  * `unsupported_protocol_version`, which is the entire finding — so the body is read, trimmed and
  * scrubbed of anything we sent, and the row gets to say what is actually wrong.
  */
@@ -555,13 +563,13 @@ async function sseProbe(spec: McpLaunchSpec, timeoutMs: number): Promise<ProbeRe
  * Ask a server what it costs.
  *
  * 🔑 **The declared transport is a hint, not a fact, so a URL server that refuses one shape is
- * retried with the other.** `acme/.mcp.json` declares `context7` as `"type": "sse"` with the URL
- * `https://mcp.context7.com/mcp`, the *streamable HTTP* endpoint, which answers a legacy SSE GET
- * with `405 Method Not Allowed`.
+ * retried with the other.** A `.mcp.json` that declares a server as `"type": "sse"` while pointing
+ * at its *streamable HTTP* endpoint gets `405 Method Not Allowed` back from a legacy SSE GET, and
+ * that misdeclaration is common.
  *
  * Without the retry the row comes back `unmeasured`, and that is the failure worth avoiding: a
  * measurement failure would be sitting in the column where a usage finding belongs, and the reader
- * has no way to tell the two apart. With the retry, context7 measures cleanly and then earns an
+ * has no way to tell the two apart. With the retry, such a server measures cleanly and then earns an
  * honest `never called` verdict from the evidence instead. Both of those are useful; a shrug in
  * the shape of an error is not.
  */

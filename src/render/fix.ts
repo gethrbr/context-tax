@@ -1,5 +1,5 @@
 /**
- * What `--fix` will do, shown before it does it.
+ * What `fix` will do, shown before it does it.
  *
  * The diff is the point. Everything above it is a summary, and a summary is a second description
  * of the change that can drift from the change — so the thing the reader confirms is the literal
@@ -175,7 +175,7 @@ export function renderApplied(
     }
   }
   out.push('');
-  // A first `--fix` usually creates the settings file it writes to, and there is no backup of a
+  // A first `fix` usually creates the settings file it writes to, and there is no backup of a
   // file that did not exist. Telling that reader to copy the backup back is an instruction they
   // cannot follow, on the one screen in the tool that has just changed their machine.
   const overwritten = applied.some((file) => file.backup !== null);

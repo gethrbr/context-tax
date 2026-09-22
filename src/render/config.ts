@@ -159,7 +159,7 @@ export function renderConfig(
     const inScope = skills.filter((skill) => skill.scope === scope);
     if (inScope.length === 0) continue;
     // 🔑 Plugin skills are addressed `plugin:skill` and two enabled plugins can ship the same
-    // name — this machine has `frontend-design` from two marketplaces. Rendering the bare name
+    // name — two marketplaces can ship `design-kit`. Rendering the bare name
     // twice reads as a bug in the tool rather than as the duplication it actually is.
     const names = inScope.map((skill) =>
       skill.plugin === null ? skill.name : `${skill.plugin.split('@')[0]}:${skill.name}`,
@@ -202,7 +202,7 @@ export function renderConfig(
   }
   if (onDemand.length > 0) {
     say(
-      `+ ${n(onDemand.length)} nested CLAUDE.md that ${onDemand.length === 1 ? 'loads' : 'load'} only when a file under ${onDemand.length === 1 ? 'it is' : 'them are'} touched`,
+      `+ ${n(onDemand.length)} nested CLAUDE.md that ${onDemand.length === 1 ? 'loads' : 'load'} only when a file under ${onDemand.length === 1 ? 'it' : 'them'} is touched`,
       4,
     );
   }

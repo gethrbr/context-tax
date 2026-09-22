@@ -1,7 +1,7 @@
 /**
  * Which MCP servers are loaded here, where each was declared, and how to turn it off.
  *
- * Four sources, four different levers. Getting the lever right is most of the value of `--fix`:
+ * Four sources, four different levers. Getting the lever right is most of the value of `fix`:
  * a server declared in `~/.claude.json` cannot be disabled from a settings file at all, so a tool
  * that emitted a `disabledMcpjsonServers` entry for it would print a fix that silently does
  * nothing — worse than printing none.
@@ -16,7 +16,7 @@
 
 import { join } from 'node:path';
 
-import { asRecord, asString, asStringArray, entryArgument, keyNames, readJsonObject, safeUrl, stringMap } from './read.js';
+import { asRecord, asString, asStringArray, entryArgument, expandEnv, keyNames, readJsonObject, safeUrl, stringMap } from './read.js';
 import type { EffectiveSettings } from './settings.js';
 import type {
   ConfigSource,
@@ -52,11 +52,11 @@ interface Candidate {
 /**
  * Pull `mcpServers` out of a file.
  *
- * ⚠️ **A `.mcp.json` with no `mcpServers` key is reported, not guessed at.** The `github` plugin
- * ships one whose server sits at the top level, unwrapped. Reading it anyway would invent a server
- * — and the evidence says Claude Code does not load it either: that plugin is enabled in this
- * repo and no `mcp__github__*` tool has ever appeared. So it becomes a problem with the file named,
- * which is the one form of this that helps.
+ * ⚠️ **A `.mcp.json` with no `mcpServers` key is reported, not guessed at.** One public plugin
+ * ships one whose server sits at the top level, unwrapped. Reading it anyway would invent a server,
+ * and the evidence says Claude Code does not load it either: with that plugin enabled, none of its
+ * tools ever appeared in a transcript. So it becomes a problem with the file named, which is the
+ * one form of this that helps.
  */
 function serversFrom(
   json: Record<string, unknown> | null,
@@ -179,7 +179,7 @@ function decide(
  *
  * ⚠️ **This order is an assumption, and the duplicate is reported rather than resolved silently.**
  * A second declaration is not a second server, so keeping both would double-count its cost and can
- * push the ledger past the exact billed total — which §4 of the plan says must fail loudly. One row
+ * push the ledger past the exact billed total — which must fail loudly. One row
  * plus a named problem is the honest shape: the number stays defensible and the ambiguity stays
  * visible.
  */
@@ -265,9 +265,15 @@ export async function resolveMcpServers(
   for (const candidate of [...chosen.values()].sort((a, b) => a.name.localeCompare(b.name))) {
     const { definition } = candidate;
     const transport = transportOf(definition);
-    const args = asStringArray(definition.args);
-    const command = asString(definition.command);
+    // `${VAR}` placeholders are expanded here, once, the way the client expands them before it
+    // starts a server. Everything below sees what the server is actually started with.
+    const args = asStringArray(definition.args).map((arg) => expandEnv(arg));
+    const rawCommand = asString(definition.command);
+    const command = rawCommand === null ? null : expandEnv(rawCommand);
     const rawUrl = asString(definition.url);
+    const url = rawUrl === null ? null : expandEnv(rawUrl);
+    const expandValues = (map: Record<string, string>): Record<string, string> =>
+      Object.fromEntries(Object.entries(map).map(([key, value]) => [key, expandEnv(value)]));
     const { enabled, reason, lever } = decide(candidate, settings, plugins);
 
     servers.push({
@@ -275,9 +281,9 @@ export async function resolveMcpServers(
       transport,
       command,
       argCount: args.length,
-      entry: entryArgument(args),
+      entry: entryArgument(command, args),
       envKeys: keyNames(definition.env),
-      url: safeUrl(rawUrl),
+      url: safeUrl(url),
       headerKeys: keyNames(definition.headers),
       scope: candidate.scope,
       path: candidate.path,
@@ -294,9 +300,9 @@ export async function resolveMcpServers(
       transport,
       command,
       args,
-      env: stringMap(definition.env),
-      url: rawUrl,
-      headers: stringMap(definition.headers),
+      env: expandValues(stringMap(definition.env)),
+      url,
+      headers: expandValues(stringMap(definition.headers)),
     });
   }
 

@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { PACKAGE_VERSION } from '../version.js';
+
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 async function manifest(): Promise<Record<string, unknown>> {
@@ -44,6 +46,15 @@ function bareImports(source: string): string[] {
 }
 
 describe('what this package promises', () => {
+  it('🚨 tells every MCP server the version that is actually installed', async () => {
+    // `clientInfo` in the `initialize` handshake was a hard-coded '0.1.0' through 0.4.0, so every
+    // server that logs its clients saw a version three releases stale.
+    const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as { version: string };
+    expect(PACKAGE_VERSION).toBe(manifest.version);
+    expect(PACKAGE_VERSION).not.toBe('unknown');
+  });
+
+
   /**
    * 🔑 Zero runtime dependencies, enforced at the import graph rather than at the manifest.
    *

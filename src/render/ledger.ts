@@ -190,15 +190,6 @@ function renderFinding(finding: Finding, index: number, colour: Palette, width: 
 }
 
 /**
- * Nothing was found, as opposed to nothing being expensive.
- *
- * 🔑 These are not the same screen and printing the first as the second is how a stranger's
- * only run of this tool reads as a broken one. A grid whose every cell is `0` or `-` looks like a
- * tool that failed, so the run that finds nothing says so in a sentence instead of drawing the
- * table. `null` tokens are deliberately excluded: null means we could not measure it, which is a
- * real cost with an unknown size, and that run has something to show.
- */
-/**
  * The scale line: what this machine has actually spent, not what this directory loads.
  *
  * A per-turn figure means very little on its own. Two hundred thousand turns is the number that
@@ -226,7 +217,7 @@ function machineLine(machine: MachineEvidence): string {
 /**
  * One line, above the table, in the units the reader pays in.
  *
- * Falls back to what was measured here when no session in this directory recorded a cold start,
+ * Falls back to what was measured here when no session in this directory was billed a first request,
  * because a headline is not worth inventing a total for: `attributed` is what the rows add up to
  * and it is the honest number when there is nothing exact to reconcile against.
  */
@@ -261,6 +252,15 @@ function headline(ledger: Ledger): string {
   return `${lead}, ${n(ledger.recoverable)} of them recoverable from ${count} finding${count === 1 ? '' : 's'} below.`;
 }
 
+/**
+ * Nothing was found, as opposed to nothing being expensive.
+ *
+ * 🔑 These are not the same screen and printing the first as the second is how a stranger's
+ * only run of this tool reads as a broken one. A grid whose every cell is `0` or `-` looks like a
+ * tool that failed, so the run that finds nothing says so in a sentence instead of drawing the
+ * table. `null` tokens are deliberately excluded: null means we could not measure it, which is a
+ * real cost with an unknown size, and that run has something to show.
+ */
 function nothingToMeasure(ledger: Ledger): boolean {
   return (
     ledger.rows.every((row) => row.kind !== 'mcp-server' && row.tokens === 0) &&
@@ -323,9 +323,9 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
     return out.join('\n');
   }
 
-  // \u{1F511} The number first, the method underneath it. This screen used to open with four lines of
-  // `chars/4` caveat before a single figure, and put the one exact number it has \u2014 the billed
-  // total \u2014 at the bottom of the table. The methodology has not been softened or moved off the
+  // 🔑 The number first, the method underneath it. This screen used to open with four lines of
+  // `chars/4` caveat before a single figure, and put the one exact number it has, the billed
+  // total, at the bottom of the table. The methodology has not been softened or moved off the
   // screen; it sits under the table next to the total it qualifies, which is where a reader
   // checking it would look anyway.
   say(machineLine(ledger.machine), 2, colour.dim);
@@ -410,7 +410,7 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
 
   if (reconciliation.overAttributed) {
     line();
-    // \u{1F6A8} The contract says rows must never sum to more than what was billed. When they do,
+    // 🚨 The contract says rows must never sum to more than what was billed. When they do,
     // the remainder is not printed as a negative number and it is not quietly absorbed.
     line(`  ${colour.red('ESTIMATOR DISAGREES WITH THE MEASUREMENT')}`);
     say(
@@ -427,14 +427,14 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
   } else if (reconciliation.total === null) {
     line();
     say(
-      'No session here recorded a cold start, so there is no exact total to reconcile against.' +
+      'No session here was billed a first request, so there is no exact total to reconcile against.' +
         ' The rows above stand on their own.',
       2,
       colour.yellow,
     );
   } else {
     say(
-      `EVERY TURN is exact, from usage. Median cold start across your ${reconciliation.window}.`,
+      `EVERY TURN is exact, from usage. Median first request across your ${reconciliation.window}.`,
       4,
       colour.dim,
     );

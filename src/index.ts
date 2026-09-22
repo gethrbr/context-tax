@@ -10,7 +10,7 @@
  *   `context-tax measure`    what it weighs, per server, per skill, per file
  *   `context-tax evidence`   what your sessions actually used (development view)
  *
- * No dollar figure is printed. The tokenizer is calibrated now (§15, within 4%), but a price is
+ * No dollar figure is printed. The tokenizer is calibrated (within 4%, see `measure/tokens.ts`), but a price is
  * the one input that cannot be read off this machine, and a number that has to be supplied is not
  * a number the tool should invent. Tokens times turns already changes behaviour.
  *
@@ -19,51 +19,34 @@
  * and the part that must never be bypassed is the part that must be easiest to read.
  */
 
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { resolve as resolvePath } from 'node:path';
 
+import { PACKAGE_VERSION } from './version.js';
 import { HELP, parseArgs } from './args.js';
 import { scanEvidence } from './evidence/index.js';
 import { readSessionSeries } from './evidence/series.js';
-import { applyFixes, planFixes } from './fix/index.js';
+import { ApplyError, applyFixes, planFixes } from './fix/index.js';
 import { buildLedger } from './ledger/index.js';
 import { measureContext } from './measure/index.js';
 import { colourEnabled, palette } from './render/color.js';
 import { renderConfig } from './render/config.js';
 import { renderApplied, renderPlan } from './render/fix.js';
 import { hangingText, screenWidth } from './render/layout.js';
-import { progress, startingLabel } from './render/progress.js';
+import { progress, startedLine, startingLabel } from './render/progress.js';
 import { renderLedger } from './render/ledger.js';
 import { renderMeasure } from './render/measure.js';
 import { renderReceipt } from './render/receipt.js';
 import { renderSession, renderSessionSvg } from './render/session.js';
 import { resolveConfig } from './resolve/index.js';
+import { fsFault } from './resolve/read.js';
 import { trustsProjectServers } from './trust.js';
 
 import type { Args } from './args.js';
+import type { AppliedFile } from './fix/types.js';
 import type { Ledger } from './ledger/types.js';
 
-/**
- * The version, read from the manifest at runtime.
- *
- * `../package.json` resolves the same way from `dist/index.js` and from `src/index.ts` under tsx,
- * and npm always ships the manifest. Importing it instead would drag a JSON file into `rootDir`
- * and change the shape of `dist/`.
- */
-async function version(): Promise<string> {
-  try {
-    const text = await readFile(new URL('../package.json', import.meta.url), 'utf8');
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed === 'object' && parsed !== null && 'version' in parsed) {
-      const value = (parsed as { version: unknown }).version;
-      if (typeof value === 'string') return value;
-    }
-  } catch {
-    /* falls through: a missing manifest is not a reason to fail a --version */
-  }
-  return 'unknown';
-}
 
 async function config(args: Args): Promise<void> {
   // 🔒 `launch` holds command lines, environment values and bearer tokens. It is destructured away
@@ -114,6 +97,11 @@ async function buildAll(args: Args): Promise<Ledger> {
           // so the label says that rather than falling back to a generic word.
           spinner.set(running.size === 0 ? 'reading your session history' : startingLabel(running));
         },
+      }).then((measured) => {
+        // Said the moment the servers are done, and left on the screen: what was started and who
+        // was contacted is the one claim about this tool a reader should be able to check.
+        spinner.note(startedLine(measured.spawned, measured.contacted));
+        return measured;
       }),
       scanEvidence(),
     ]);
@@ -234,7 +222,19 @@ async function fix(args: Args): Promise<void> {
     process.stdout.write('\n');
   }
 
-  const applied = await applyFixes(plan);
+  let applied: AppliedFile[];
+  try {
+    applied = await applyFixes(plan);
+  } catch (error) {
+    if (!(error instanceof ApplyError)) throw error;
+    // A read-only `.claude/` was a stack trace, on the one command that changes the machine. The
+    // files before the failed one are already written, so they are reported as written.
+    if (error.applied.length > 0) process.stdout.write(`${renderApplied(error.applied, colour)}\n`);
+    process.stdout.write(`  ${colour.red(`${error.message}.`)}\n`);
+    process.stdout.write(`  ${colour.dim('That file is as it was, and nothing after it was attempted.')}\n\n`);
+    process.exitCode = 1;
+    return;
+  }
   process.stdout.write(`${renderApplied(applied, colour)}\n`);
 }
 
@@ -243,10 +243,13 @@ async function receipt(args: Args): Promise<void> {
   const built = await buildAll(args);
   if (args.json) {
     process.stdout.write(`${JSON.stringify(built, null, 2)}\n`);
+    if (built.reconciliation.overAttributed) process.exitCode = 1;
     return;
   }
   const today = new Date().toISOString().slice(0, 10);
   process.stdout.write(`${renderReceipt(built, palette(colourEnabled(args.color)), today)}\n`);
+  // The same contract as the main screen: rows past the billed total do not exit 0.
+  if (built.reconciliation.overAttributed) process.exitCode = 1;
 }
 
 /**
@@ -284,11 +287,20 @@ async function session(args: Args): Promise<void> {
   const view = { series, openedAt: chosen.coldStartTokens };
 
   if (args.json) {
+    if (args.svg !== undefined) process.stderr.write('  --svg is ignored with --json\n');
     process.stdout.write(`${JSON.stringify({ sessionId: chosen.sessionId, ...series }, null, 2)}\n`);
     return;
   }
   if (args.svg !== undefined) {
-    await writeFile(resolvePath(args.svg), renderSessionSvg(view), 'utf8');
+    // A directory that is not there was an uncaught ENOENT with a stack trace, on a command
+    // whose whole job is to make something shareable.
+    try {
+      await writeFile(resolvePath(args.svg), renderSessionSvg(view), 'utf8');
+    } catch (error) {
+      process.stderr.write(`\n  could not write ${args.svg}: ${fsFault(error)}.\n\n`);
+      process.exitCode = 1;
+      return;
+    }
     process.stdout.write(`\n  wrote ${args.svg}\n`);
   }
   process.stdout.write(`${renderSession(view, palette(colourEnabled(args.color)))}\n`);
@@ -343,6 +355,7 @@ async function evidence(args: Args): Promise<void> {
   }
 
   const n = (value: number): string => value.toLocaleString('en-US');
+  const plural = (count: number, noun: string): string => `${n(count)} ${noun}${count === 1 ? '' : 's'}`;
   // Every line here is a joined list, and a joined list is exactly the shape that ran off the
   // right-hand edge of the window and wrapped back to column 0.
   const width = screenWidth();
@@ -358,9 +371,9 @@ async function evidence(args: Args): Promise<void> {
 
   console.log('');
   say(
-    `scanned ${n(scanned.scannedFiles)} files in ${elapsed}s · ` +
-      `${n(sessions)} sessions (+${n(subagents)} subagent transcripts) · ${n(turns)} turns · ` +
-      `${n(context)} context tokens · ${n(scanned.malformedLines)} malformed lines`,
+    `scanned ${plural(scanned.scannedFiles, 'file')} in ${elapsed}s · ` +
+      `${plural(sessions, 'session')} (+${plural(subagents, 'subagent transcript')}) · ${plural(turns, 'turn')} · ` +
+      `${n(context)} context tokens · ${plural(scanned.malformedLines, 'malformed line')}`,
     2,
   );
   console.log('');
@@ -369,8 +382,8 @@ async function evidence(args: Args): Promise<void> {
     const cold = project.coldStart;
     console.log(`  ${project.cwd}`);
     say(
-      `${n(project.sessions)} sessions · ${n(project.turns)} turns ` +
-        `(${n(project.sidechainTurns)} sidechain) · cold start median ` +
+      `${plural(project.sessions, 'session')} · ${plural(project.turns, 'turn')} ` +
+        `(${n(project.sidechainTurns)} sidechain) · first request median ` +
         `${cold ? n(Math.round(cold.median)) : '-'}`,
       4,
     );
@@ -445,7 +458,7 @@ if (args.command === 'help') {
       await ledger(args);
       break;
     case 'version':
-      process.stdout.write(`${await version()}\n`);
+      process.stdout.write(`${PACKAGE_VERSION}\n`);
       break;
     case 'fix':
       await fix(args);

@@ -1,5 +1,5 @@
 /**
- * What `--fix` is allowed to do, as data.
+ * What `fix` is allowed to do, as data.
  *
  * The ledger decides **what should change** — it is the only pass that has cost, usage and a
  * defensible window in one place. This module decides **how it is written**. Keeping those apart is
@@ -99,7 +99,7 @@ export interface FixPlan {
   /**
    * Actions the ledger proposed that are already true on disk.
    *
-   * Tracked rather than dropped so that a second `--fix` run says *"already done"* instead of
+   * Tracked rather than dropped so that a second `fix` run says *"already done"* instead of
    * printing an empty plan that reads like a failure.
    */
   alreadyApplied: FixAction[];

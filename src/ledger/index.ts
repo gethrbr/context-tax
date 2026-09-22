@@ -136,10 +136,10 @@ function turnsIn(sessions: SessionEvidence[]): number {
  * Calls recorded for something that can be named two ways.
  *
  * 🚨 The `Skill` tool's `skill` argument and the `Task` tool's `subagent_type` accept a bare name
- * **and** a `plugin:name` form, and this machine's transcripts hold both for the same skill —
- * `frontend-design` four times and `frontend-design:frontend-design` twice. Matching only the bare
+ * **and** a `plugin:name` form, and real transcripts hold both for the same skill —
+ * `design-kit` a few times and `design-kit:design-kit` beside it. Matching only the bare
  * name loses the prefixed calls, which turns something you use into a `never invoked` finding. That
- * was survivable while the tool only printed; with `--fix` behind it, it is a write that switches
+ * was survivable while the tool only printed; with `fix` behind it, it is a write that switches
  * off a skill somebody uses.
  *
  * When two plugins ship the same skill name, both get credit for the bare-name calls. That
@@ -224,7 +224,7 @@ function fixFor(server: ResolvedMcpServer): string {
 }
 
 /**
- * The same four levers as `fixFor`, as something `--fix` can execute.
+ * The same four levers as `fixFor`, as something `fix` can execute.
  *
  * 🔒 `claude-mcp-remove` stays a `manual` action on purpose. It is the `~/.claude.json` lever, and
  * that file holds live API keys and bearer tokens: this tool will not rewrite it and will not back
@@ -280,9 +280,9 @@ function skillLabel(skill: { name: string; plugin: string | null }): string {
 /**
  * Names for a list of skills, with collisions widened until they are actually distinct.
  *
- * 🔑 This machine has `frontend-design` twice, from two different marketplaces, under a plugin of
- * the same name. Prefixing with the plugin is not enough: it produces `frontend-design:frontend-
- * design` twice, and a list that repeats itself reads as a bug in the tool rather than as the
+ * 🔑 Two marketplaces can ship `design-kit` under a plugin of the same name. Prefixing with the
+ * plugin is not enough: it produces `design-kit:design-kit` twice, and a list that repeats itself
+ * reads as a bug in the tool rather than as the
  * duplication it is reporting. The marketplace is the part that differs, so it is added only where
  * it has to be.
  */
@@ -460,7 +460,7 @@ export function buildLedger(
   const root = config.repoRoot ?? config.cwd;
 
   // Subagent transcripts are billed work but carry a different prefix, so they would bias the
-  // cold-start median and inflate every per-session denominator derived from this list.
+  // first-request median and inflate every per-session denominator derived from this list.
   const allSessions = evidence.sessions
     .filter((session) => session.kind === 'session')
     .sort((a, b) => (b.firstSeen ?? '').localeCompare(a.firstSeen ?? ''));
@@ -474,11 +474,14 @@ export function buildLedger(
     : sessions;
   const recent = started.filter((session) => session.coldStartTokens !== null).slice(0, windowSize);
   const total = median(recent.map((session) => session.coldStartTokens ?? 0));
+  // A session with no timestamp on any line has no date; the range is drawn from the ones that do,
+  // and left off when none does, rather than printed as " to 2026-09-10".
+  const dated = recent.map((session) => session.firstSeen?.slice(0, 10)).filter((day): day is string => day !== undefined);
+  const span = dated.length === 0 ? '' : `, ${dated[dated.length - 1]} to ${dated[0]}`;
   const windowLabel =
     recent.length === 0
-      ? 'no session here recorded a cold start'
-      : `${recent.length} most recent session${recent.length === 1 ? '' : 's'}, ` +
-        `${(recent[recent.length - 1].firstSeen ?? '').slice(0, 10)} to ${(recent[0].firstSeen ?? '').slice(0, 10)}`;
+      ? 'no session here was billed a first request'
+      : `${recent.length} most recent session${recent.length === 1 ? '' : 's'}${span}`;
 
   /**
    * 🔑 What one of those sessions actually sent. When there is one, every row it covers is read
@@ -569,7 +572,7 @@ export function buildLedger(
    * and a single call anywhere is enough to rule the lever out.
    */
   const pluginIsIdle = (id: string): boolean => {
-    // \u{1F6A8} Machine-wide on purpose, and stricter than every other denominator here. This guards the
+    // 🚨 Machine-wide on purpose, and stricter than every other denominator here. This guards the
     // only lever that takes four things away at once, so a single call anywhere on the machine has
     // to be enough to rule it out. Scoping it to this tree would switch off a plugin that is
     // working in another repo, and the tool would report success while doing it.
