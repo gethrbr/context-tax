@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.4.1
 
 An audit of the published package, run against fabricated machines that look nothing like the one
 it was built on. Nothing here changes what the tool is for; everything here is a way it could have
