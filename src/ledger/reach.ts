@@ -9,8 +9,8 @@
  * A `.mcp.json` server is loadable in exactly one project, so counting the machine's sessions
  * against it is not a wider window on the same question, it is a window on a different one.
  *
- * Without this, the most likely first run of the tool was also its worst. Measured against the
- * published `0.2.1` on 2026-09-07, in a directory that had never run Claude Code, against a
+ * Without this, a first run in a fresh directory was wrong in the loudest way. Measured before
+ * the fix, in a directory that had never run Claude Code, against a
  * `.mcp.json` committed a year earlier, with a fabricated corpus whose every session belongs to
  * another directory:
  *

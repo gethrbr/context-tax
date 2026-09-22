@@ -2,8 +2,8 @@
  * The instruction files that ride along on every turn.
  *
  * ⚠️ **Not every `CLAUDE.md` in a repo is part of the fixed prefix.** A nested one is injected only
- * when a file under its directory is touched. Observed directly while building this package: this
- * repo's `packages/frontend/CLAUDE.md` entered context only after a frontend file was read, and
+ * when a file under its directory is touched. Observed directly in a monorepo: a
+ * `packages/<app>/CLAUDE.md` entered context only after a file under it was read, and
  * had never been there across the preceding turns. Folding nested files into the per-turn tax
  * would overstate it — for this repo, by every nested file at once.
  *

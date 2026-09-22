@@ -116,6 +116,21 @@ describe('the receipt', () => {
     for (const line of receipt.split('\n')) expect(line.length).toBeLessThanOrEqual(48);
   });
 
+  /**
+   * 🚨 A listing read from a session newer than the ones the total is billed from can outrun the
+   * total. The main screen refuses that sum in red; the receipt printed the rows and the smaller
+   * total and said nothing, on the one screen built to be shared.
+   */
+  it('says so when its rows sum past the total, and still fits', () => {
+    const grown = readmeLedger();
+    grown.reconciliation = { ...grown.reconciliation, total: 8_000, unattributed: null, overAttributed: true };
+    const screen = renderReceipt(grown, plain, '2026-09-02');
+    expect(screen).toContain('rows sum past the total');
+    expect(screen).not.toContain('Not itemised');
+    for (const line of screen.split('\n')) expect(line.length).toBeLessThanOrEqual(48);
+    expect(receipt).not.toContain('rows sum past the total');
+  });
+
   it('matches the README, character for character', async () => {
     const readme = await readFile(join(packageRoot, 'README.md'), 'utf8');
     const after = readme.slice(readme.indexOf('## The receipt'));

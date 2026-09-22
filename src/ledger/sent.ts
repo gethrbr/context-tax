@@ -101,10 +101,19 @@ export function readSentListing(
   let smallestDropped: number | null = null;
   let hiddenSince = 0;
 
+  const fraction = settings.budgetFraction ?? SKILL_LISTING_DEFAULTS.budgetFraction;
+  // 🚨 A bare name only proves a budget when the list is big enough to have hit one. The smallest
+  // window the client runs is 200,000 tokens, so no budget under this fraction is smaller than its
+  // share of that. A 465-character list with one bare name is not a pinned list: read as one, it
+  // derived "a window of about 12,000" and printed 292% on the first line. Under this floor the
+  // bare names are skills with nothing to say, and nothing was taken away.
+  const smallestBudget = SKILL_LISTING_DEFAULTS.contextWindow * CHARS_PER_TOKEN * fraction;
+  const pinned = settings.envBudgetChars !== null || sent.listChars + OVERSHOOT >= smallestBudget;
+
   for (const skill of sent.skills) {
     const onDisk = byName.get(skill.name);
     if (onDisk?.form === 'hidden') hiddenSince += 1;
-    if (skill.described) continue;
+    if (skill.described || !pinned) continue;
     // A name alone is what the budget leaves, and also what `name-only` asks for and what a skill
     // with no description looks like. Only the first is something that was taken away.
     if (onDisk !== undefined && (onDisk.form !== 'full' || onDisk.textChars === 0)) continue;
@@ -118,7 +127,6 @@ export function readSentListing(
     smallestDropped = smallestDropped === null ? extra : Math.min(smallestDropped, extra);
   }
 
-  const fraction = settings.budgetFraction ?? SKILL_LISTING_DEFAULTS.budgetFraction;
   const budget: ListingBudget =
     settings.envBudgetChars !== null
       ? { chars: settings.envBudgetChars, basis: 'env', windowTokens: null }

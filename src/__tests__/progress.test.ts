@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { progress, startingLabel } from '../render/progress.js';
+import { progress, startedLine, startingLabel } from '../render/progress.js';
 
 /** A stream that records instead of drawing, so the assertions are on bytes and not on a screen. */
 function fake(options: { isTTY?: boolean; columns?: number } = {}) {
@@ -27,6 +27,30 @@ function fake(options: { isTTY?: boolean; columns?: number } = {}) {
     },
   };
 }
+
+describe('what a run says it started', () => {
+  it('names what was started and who was contacted, once each, and says so when it was nothing', () => {
+    expect(startedLine(['npx', 'npx', 'uvx'], ['b.example.com', 'a.example.com'])).toBe(
+      '  started npx, uvx · contacted a.example.com, b.example.com',
+    );
+    expect(startedLine([], [])).toBe('  started nothing · contacted nothing over the network');
+  });
+
+  it('leaves the note on the screen when the spinner is done, and writes nothing off a terminal', () => {
+    const stream = fake({ columns: 80 });
+    const spinner = progress(stream);
+    spinner.set('starting linear');
+    spinner.note('  started npx · contacted nothing over the network');
+    spinner.done();
+    // The note ends with its own newline, so the erase that follows cannot reach it.
+    expect(stream.all).toContain('  started npx · contacted nothing over the network\n');
+    expect(stream.all.split('\n')[0]).toMatch(/started npx/);
+
+    const quiet = fake({ isTTY: false });
+    progress(quiet).note('  started npx');
+    expect(quiet.all).toBe('');
+  });
+});
 
 describe('the spinner writes nothing it should not', () => {
   it('🔒 draws nothing at all when the stream is not a terminal', () => {

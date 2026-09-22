@@ -1473,6 +1473,33 @@ describe('rows read from what a session sent', () => {
     expect(skillsRow(ledger)?.verdict).toMatchObject({ why: expect.stringContaining('about 750,000 tokens') });
   });
 
+  it('🚨 reads no budget, and no window, out of a list too small to have hit one', () => {
+    // A 465-character list with one bare name whose skill is in no file. Read as a pinned list, it
+    // derived "a window of about 12,000" and the first line said 292% of it. The smallest window
+    // the client runs is 200,000 tokens, so no list under 8,000 characters was ever cut by the
+    // default budget: the bare name is a skill with nothing to say, not one that lost something.
+    const settings = { budgetFraction: null, maxDescChars: null, envBudgetChars: null };
+    const small = {
+      chars: 520,
+      listChars: 465,
+      entries: 4,
+      bare: 1,
+      skills: [sent('keybindings', true, 150), sent('release-notes', true, 150), sent('design-kit', true, 150), sent('mystery', false, 0)],
+    };
+    const read = readSentListing(record({ skillListing: small }), toListedSkills(onDisk, settings), settings);
+    expect(read).not.toBeNull();
+    if (read === null) return;
+    expect(read.dropped).toEqual([]);
+    expect(read.budget).toMatchObject({ basis: 'under', windowTokens: null });
+    expect(read.uncappedIsFloor).toBe(false);
+    expect(fractionToSendAll(read, settings)).toBeNull();
+
+    // And the same list at 8,000 characters is a pinned one: the floor is the budget, not the count.
+    const pinned = readSentListing(record({ skillListing: { ...small, listChars: 7_990, chars: 8_050 } }), toListedSkills(onDisk, settings), settings);
+    expect(pinned?.dropped.map((skill) => skill.name)).toEqual(['mystery']);
+    expect(pinned?.budget.basis).toBe('derived');
+  });
+
   it('claims no window when every description was sent', () => {
     const everything = listed.map((skill) => ({ ...skill, described: true }));
     const ledger = build(record({ skillListing: { ...listing, bare: 0, skills: everything } }));

@@ -2,7 +2,7 @@
  * `context-tax measure` - what the loaded config weighs.
  *
  * This screen is deliberately not the ledger. It prints cost without a verdict, because the
- * verdict needs the join against evidence that M4 builds, and a cost screen that started
+ * verdict needs the join against evidence that the ledger builds, and a cost screen that started
  * recommending things on cost alone would be recommending you delete the server you use most.
  *
  * 🔑 Two things are always on screen, never behind a flag:

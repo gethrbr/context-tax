@@ -1,7 +1,7 @@
 /**
  * A unified diff, in about sixty lines and with no dependency.
  *
- * `--fix` shows the exact change before it writes it, and "exact" has to mean the lines, not a
+ * `fix` shows the exact change before it writes it, and "exact" has to mean the lines, not a
  * summary of them. A summary is a second description of the edit that can drift from the edit
  * itself, and the whole reason to confirm before writing is that the reader should be checking the
  * thing that will happen rather than a sentence about it.

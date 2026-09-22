@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { entryArgument, parseFrontmatter, resolveConfig, safeUrl, sessionsSince } from '../resolve/index.js';
+import { entryArgument, expandEnv, parseFrontmatter, resolveConfig, safeUrl, sessionsSince } from '../resolve/index.js';
 import type { SessionEvidence } from '../evidence/types.js';
 
 let root: string;
@@ -64,26 +64,58 @@ describe('parseFrontmatter', () => {
 
 describe('safeUrl', () => {
   it('drops the query string, where a token is routinely parked', () => {
-    expect(safeUrl('https://host/mcp?token=sk-secret')).toBe('https://host/mcp');
+    expect(safeUrl('https://host/mcp?token=sk-secret')).toBe('https://host');
   });
 
   it('drops userinfo', () => {
-    expect(safeUrl('https://user:sk-secret@host/mcp')).toBe('https://host/mcp');
+    expect(safeUrl('https://user:sk-secret@host/mcp')).toBe('https://host');
+  });
+
+  it('🔒 drops the path too: hosted gateways put the secret there', () => {
+    expect(safeUrl('https://mcp.example.com/api/mcp/s/sk-secret-in-the-path/mcp')).toBe('https://mcp.example.com');
+    expect(safeUrl('https://host:8443/')).toBe('https://host:8443');
   });
 
   it('returns null rather than the raw string when it cannot parse', () => {
     // An unparseable URL is exactly the shape most likely to be carrying something odd.
     expect(safeUrl('not a url')).toBeNull();
+    expect(safeUrl('')).toBeNull();
+    expect(safeUrl('127.0.0.1:8080/mcp')).toBeNull();
+    expect(safeUrl('${API_BASE:-https://api.example.com}/mcp')).toBeNull();
+  });
+});
+
+describe('expandEnv', () => {
+  it('fills ${VAR} and ${VAR:-default} the way the client does, and leaves an unset one as written', () => {
+    const env = { API_BASE: 'https://api.example.com', TOKEN: 'tok_SECRET_VALUE' };
+    expect(expandEnv('${API_BASE}/mcp', env)).toBe('https://api.example.com/mcp');
+    expect(expandEnv('${MISSING:-https://fallback.example.com}/mcp', env)).toBe('https://fallback.example.com/mcp');
+    expect(expandEnv('Bearer ${TOKEN}', env)).toBe('Bearer tok_SECRET_VALUE');
+    expect(expandEnv('${MISSING}/mcp', env)).toBe('${MISSING}/mcp');
+    expect(expandEnv('no placeholders', env)).toBe('no placeholders');
+  });
+});
+
+describe('entryArgument', () => {
+  it('🔒 gives no entry for a command that is not a runner, whose first positional can be a token', () => {
+    expect(entryArgument('/opt/bin/my-server', ['sk-secret-positional'])).toBeNull();
+    expect(entryArgument('docker', ['run', '-i', 'image'])).toBeNull();
+    expect(entryArgument(null, ['pkg'])).toBeNull();
+  });
+
+  it('reads the package from a runner given by path', () => {
+    expect(entryArgument('/usr/local/bin/npx', ['pkg'])).toBe('pkg');
+    expect(entryArgument('uvx', ['mcp-server-fetch'])).toBe('mcp-server-fetch');
   });
 });
 
 describe('entryArgument', () => {
   it('skips valueless flags to reach the package', () => {
-    expect(entryArgument(['-y', '@playwright/mcp@latest'])).toBe('@playwright/mcp@latest');
+    expect(entryArgument('npx', ['-y', '@playwright/mcp@latest'])).toBe('@playwright/mcp@latest');
   });
 
   it('stops at a flag that takes a value, because the next argument is where a key lives', () => {
-    expect(entryArgument(['--api-key', 'sk-secret', 'pkg'])).toBeNull();
+    expect(entryArgument('npx', ['--api-key', 'sk-secret', 'pkg'])).toBeNull();
   });
 });
 
@@ -304,6 +336,45 @@ describe('mcp servers', () => {
    * Claude Code does not load — no `mcp__github__*` tool has ever appeared despite the plugin
    * being enabled.
    */
+  it('🔒 reports a malformed .mcp.json by position, never by quoting the text around the fault', async () => {
+    // V8 quotes about ten characters around the bad token, and in a settings file the bad token is
+    // as likely as not to sit beside a key.
+    await writeFile(join(repo, '.mcp.json'), '{"mcpServers": {"x": {"url": "https://h/mcp", "headers": {"k": sk-planted-secret-1234}}}}');
+
+    const { config } = await resolve();
+    const problem = config.problems.find((entry) => entry.message.includes('could not parse'));
+    expect(problem?.message).toMatch(/could not parse: not valid JSON( at (position|line) \d+.*)?$/);
+    expect(problem?.message).not.toContain('planted');
+  });
+
+  it('reads a settings file that starts with a byte-order mark, as a Windows editor leaves it', async () => {
+    // 🚨 JSON.parse rejects the mark, and rejecting the file dropped every server it declared.
+    await writeFile(join(repo, '.mcp.json'), '\uFEFF{"mcpServers": {"bom": {"url": "https://bom.example/mcp"}}}');
+    const { config } = await resolve();
+    expect(config.problems.filter((entry) => entry.message.includes('could not parse'))).toEqual([]);
+    expect(config.mcpServers.map((server) => server.name)).toContain('bom');
+  });
+
+  it('fills ${VAR} placeholders into the launch spec, and shows the filled host on the row', async () => {
+    process.env.CONTEXT_TAX_TEST_BASE = 'https://filled.example.com';
+    try {
+      await write(join(repo, '.mcp.json'), {
+        mcpServers: {
+          remote: { type: 'http', url: '${CONTEXT_TAX_TEST_BASE}/mcp', headers: { authorization: 'Bearer ${CONTEXT_TAX_TEST_TOKEN:-fallback-token}' } },
+          local: { command: 'npx', args: ['-y', 'pkg', '--base', '${CONTEXT_TAX_TEST_BASE}'], env: { BASE: '${CONTEXT_TAX_TEST_BASE}' } },
+        },
+      });
+      const { config, launch } = await resolve();
+      expect(launch.get('remote')?.url).toBe('https://filled.example.com/mcp');
+      expect(launch.get('remote')?.headers.authorization).toBe('Bearer fallback-token');
+      expect(launch.get('local')?.args).toEqual(['-y', 'pkg', '--base', 'https://filled.example.com']);
+      expect(launch.get('local')?.env.BASE).toBe('https://filled.example.com');
+      expect(config.mcpServers.find((server) => server.name === 'remote')?.url).toBe('https://filled.example.com');
+    } finally {
+      delete process.env.CONTEXT_TAX_TEST_BASE;
+    }
+  });
+
   it('reports a .mcp.json missing its mcpServers wrapper instead of guessing', async () => {
     await write(join(repo, '.mcp.json'), { github: { type: 'http', url: 'https://host/mcp' } });
 

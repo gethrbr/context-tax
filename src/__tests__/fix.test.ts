@@ -11,13 +11,13 @@
  * Tests marked 🚨 pin a bug that was real in this package, not a hypothetical.
  */
 
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { unifiedDiff } from '../fix/diff.js';
-import { applyFixes, backupRoot, planFixes } from '../fix/index.js';
+import { ApplyError, applyFixes, backupRoot, planFixes } from '../fix/index.js';
 import { detectIndent, editSettings, FixError } from '../fix/json.js';
 import { palette } from '../render/color.js';
 import { renderApplied, renderPlan } from '../render/fix.js';
@@ -271,6 +271,80 @@ describe('writing', () => {
     await writeFile(settings, '{}\n');
     await planFixes([action({ settingsPath: settings })]);
     expect(await readFile(settings, 'utf8')).toBe('{}\n');
+  });
+
+  /**
+   * 🚨 A read-only `.claude/` was an uncaught EACCES with a stack trace, after the backup had
+   * already been copied. The error has to say which file, why, in words, and what did land first.
+   */
+  it('a directory it cannot write into is a sentence, and the file before it is reported as written', async () => {
+    if (process.getuid?.() === 0) return; // root can write anywhere, so there is nothing to refuse
+    const { home, settings } = await machine();
+    await writeFile(settings, '{\n  "permissions": {}\n}\n');
+    const locked = join(home, 'locked', '.claude', 'settings.local.json');
+    await mkdir(join(home, 'locked', '.claude'), { recursive: true });
+    await writeFile(locked, '{}\n');
+    await chmod(join(home, 'locked', '.claude'), 0o555);
+    try {
+      const plan = await planFixes([action({ settingsPath: settings }), action({ settingsPath: locked })]);
+      let caught: unknown;
+      try {
+        await applyFixes(plan, { home, stamp: 'stamp' });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ApplyError);
+      const failure = caught as ApplyError;
+      expect(failure.message).toBe(`could not write ${locked}: permission denied`);
+      expect(failure.path).toBe(locked);
+      expect(failure.applied.map((file) => file.path)).toEqual([settings]);
+      expect(failure.applied[0].backup).not.toBeNull();
+      // The file it could not write is as it was, nothing of it was copied, and no temp file remains.
+      expect(await readFile(locked, 'utf8')).toBe('{}\n');
+      await expect(stat(join(backupRoot(home), 'stamp', `${home.replace(/^\//, '').replace(/\//g, '-')}-locked-.claude-settings.local.json`))).rejects.toThrow();
+      await expect(stat(`${locked}.context-tax.tmp`)).rejects.toThrow();
+      // The first file's backup is in the stamp directory, so the directory stays.
+      expect((await stat(join(backupRoot(home), 'stamp'))).isDirectory()).toBe(true);
+    } finally {
+      await chmod(join(home, 'locked', '.claude'), 0o755);
+    }
+  });
+
+  it('a target that is a directory fails at the rename, and takes its temp file with it', async () => {
+    const { home, settings } = await machine();
+    await mkdir(settings);
+    const plan = await planFixes([action({ settingsPath: settings })]);
+    await expect(applyFixes(plan, { home, stamp: 'stamp' })).rejects.toThrow(`could not write ${settings}: that is a directory`);
+    await expect(stat(`${settings}.context-tax.tmp`)).rejects.toThrow();
+  });
+
+  it('leaves no empty backup directory behind when the only write failed', async () => {
+    if (process.getuid?.() === 0) return;
+    const { home, settings } = await machine();
+    await writeFile(settings, '{}\n');
+    await chmod(join(home, 'repo', '.claude'), 0o555);
+    try {
+      await expect(applyFixes(await planFixes([action({ settingsPath: settings })]), { home, stamp: 'stamp' })).rejects.toThrow('permission denied');
+      await expect(stat(join(backupRoot(home), 'stamp'))).rejects.toThrow();
+    } finally {
+      await chmod(join(home, 'repo', '.claude'), 0o755);
+    }
+  });
+
+  it('the backup is copied only once the new text is on disk beside the target', async () => {
+    if (process.getuid?.() === 0) return;
+    const { home } = await machine();
+    // A missing parent whose own parent is read-only: mkdir fails before any temp file is written.
+    const locked = join(home, 'locked', '.claude', 'settings.local.json');
+    await mkdir(join(home, 'locked'));
+    await chmod(join(home, 'locked'), 0o555);
+    try {
+      const plan = await planFixes([action({ settingsPath: locked })]);
+      await expect(applyFixes(plan, { home, stamp: 'stamp' })).rejects.toThrow('permission denied');
+      await expect(stat(join(backupRoot(home), 'stamp'))).rejects.toThrow();
+    } finally {
+      await chmod(join(home, 'locked'), 0o755);
+    }
   });
 });
 

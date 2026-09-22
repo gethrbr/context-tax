@@ -37,7 +37,7 @@ export type McpTransport = 'stdio' | 'http' | 'sse' | 'unknown';
  */
 export type McpScope = 'project-mcp-json' | 'user' | 'claude-json-project' | 'plugin';
 
-/** How `--fix` would disable a server, given where it came from. */
+/** How `fix` would disable a server, given where it came from. */
 export type McpFixLever =
   | { kind: 'disabledMcpjsonServers'; settingsPath: string }
   /**
@@ -189,8 +189,8 @@ export interface ResolvedCommand {
  *
  * ⚠️ `alwaysLoaded` is the distinction that keeps this row honest. A `CLAUDE.md` in a subdirectory
  * is injected only when a file under it is touched, so folding it into the per-turn prefix would
- * overstate the tax. Observed directly: this repo's `packages/frontend/CLAUDE.md` appeared in
- * context only after a frontend file was read.
+ * overstate the tax. Observed directly in a monorepo: a `packages/<app>/CLAUDE.md` appeared in
+ * context only after a file under it was read.
  */
 export interface MemoryFile {
   path: string;

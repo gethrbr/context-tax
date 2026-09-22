@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { readmeFixApplied, readmeFixPlan } from './fixtures/readme-fix.js';
 import { readmeLedger } from './fixtures/readme-ledger.js';
 
 import type { Ledger } from '../ledger/types.js';
@@ -21,6 +22,7 @@ import type { ResolvedConfig } from '../resolve/types.js';
 import { palette } from '../render/color.js';
 import { hangingText, screenWidth, shortPath, shortenHome, wrapClamped, wrapInstruction, wrapText } from '../render/layout.js';
 import { renderLedger } from '../render/ledger.js';
+import { renderApplied, renderPlan } from '../render/fix.js';
 import { renderMeasure } from '../render/measure.js';
 import { renderTable, tableWidth } from '../render/table.js';
 
@@ -605,5 +607,30 @@ describe('the README screen is the renderer, not a transcription', () => {
   it('has no absolute home directory in it, which is what a real run would leave behind', async () => {
     const block = await reportBlock();
     expect(block).not.toMatch(/\/(Users|home)\//);
+  });
+});
+
+/**
+ * The `fix` screens too. They were hand-written once, and drifted: the diff header, the sentences
+ * under each action and the backup path all said things the renderer never did.
+ */
+describe('the README fix screens are the renderer, not a transcription', () => {
+  async function firstUntaggedFenceAfter(heading: string): Promise<string> {
+    const readme = await readFile(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'README.md'), 'utf8');
+    const after = readme.slice(readme.indexOf(heading));
+    const fenced = [...after.matchAll(/```([a-z]*)\n([\s\S]*?)\n```/g)];
+    return fenced.find((match) => match[1] === '')?.[2] ?? '';
+  }
+
+  it('matches the plan, character for character', async () => {
+    const block = await firstUntaggedFenceAfter('### 1. It shows you the literal bytes');
+    expect(block.trim()).toBe(renderPlan(await readmeFixPlan(), plain, 80).trim());
+  });
+
+  it('matches the written screen, character for character, with a backup path of the real shape', async () => {
+    const block = await firstUntaggedFenceAfter('### 3. It writes');
+    expect(block.trim()).toBe(renderApplied(readmeFixApplied(), plain, 80).trim());
+    // The screen shortens the path; the fixture behind it has the shape `fix` really writes.
+    expect(readmeFixApplied()[0].backup).toMatch(/\/backups\/\d{4}-\d{2}-\d{2}T[\dZ-]+\/[^/]+$/);
   });
 });

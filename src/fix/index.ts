@@ -14,11 +14,12 @@
  *     a truncated settings file is a broken session, not a lost edit.
  */
 
-import { chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import type { AppliedFile, FileAction, FileEdit, FixAction, FixPlan, ManualAction, SettingsAction } from './types.js';
+import { fsFault } from '../resolve/read.js';
 import { editSettings, FixError } from './json.js';
 import { actionKey, isFileAction } from './types.js';
 
@@ -126,8 +127,27 @@ export interface ApplyOptions {
 }
 
 /**
+ * A write that could not be made. `applied` is every file that was written before it, each with
+ * its backup, because the caller has to say so: a run that wrote one project's settings and then
+ * hit a read-only directory in the next has changed the machine, and "failed" alone would hide it.
+ */
+export class ApplyError extends FixError {
+  constructor(
+    message: string,
+    readonly path: string,
+    readonly applied: AppliedFile[],
+  ) {
+    super(message);
+  }
+}
+
+/**
  * Write the plan. Confirmation happens in the CLI, above this line, on purpose: a function that
  * both asks and writes cannot be tested without a terminal.
+ *
+ * Per file the order is: new text into a temp file beside the target, then the backup copy, then
+ * the rename. A failure at any step leaves the target as it was, and the backup exists only once
+ * the new text is on disk, so a read-only directory produces one sentence and no stray copy.
  */
 export async function applyFixes(plan: FixPlan, options: ApplyOptions = {}): Promise<AppliedFile[]> {
   const home = options.home ?? homedir();
@@ -136,23 +156,35 @@ export async function applyFixes(plan: FixPlan, options: ApplyOptions = {}): Pro
   const applied: AppliedFile[] = [];
 
   if (plan.edits.some((edit) => edit.before !== null)) {
-    await mkdir(target, { recursive: true, mode: DIR_MODE });
-    await chmod(target, DIR_MODE);
+    try {
+      await mkdir(target, { recursive: true, mode: DIR_MODE });
+      await chmod(target, DIR_MODE);
+    } catch (error) {
+      throw new ApplyError(`could not create the backup directory ${target}: ${fsFault(error)}`, target, applied);
+    }
   }
 
   for (const edit of plan.edits) {
-    let backup: string | null = null;
-    if (edit.before !== null) {
-      backup = join(target, flatten(edit.path));
-      await copyFile(edit.path, backup);
-      await chmod(backup, FILE_MODE);
-    }
-    await mkdir(dirname(edit.path), { recursive: true });
     // Temp file beside the target, then rename: same filesystem, so the rename is atomic and a
     // killed process cannot leave a settings file half written.
     const temp = `${edit.path}.context-tax.tmp`;
-    await writeFile(temp, edit.after, { encoding: 'utf8', mode: FILE_MODE });
-    await rename(temp, edit.path);
+    let backup: string | null = null;
+    try {
+      await mkdir(dirname(edit.path), { recursive: true });
+      await writeFile(temp, edit.after, { encoding: 'utf8', mode: FILE_MODE });
+      if (edit.before !== null) {
+        backup = join(target, flatten(edit.path));
+        await copyFile(edit.path, backup);
+        await chmod(backup, FILE_MODE);
+      }
+      await rename(temp, edit.path);
+    } catch (error) {
+      await unlink(temp).catch(() => undefined);
+      // The stamp directory was made up front; when nothing was copied into it, it is an empty
+      // directory in the cache with a timestamp for a name, and `rmdir` refuses a non-empty one.
+      await rmdir(target).catch(() => undefined);
+      throw new ApplyError(`could not write ${edit.path}: ${fsFault(error)}`, edit.path, applied);
+    }
     applied.push({ path: edit.path, backup, created: edit.before === null });
   }
 

@@ -7,7 +7,7 @@
  * either of those and reads the silence as a server nobody uses.
  */
 
-/** `mcp__acme__acme_get_knowledge` → `{ server: 'acme', tool: 'acme_get_knowledge' }`. */
+/** `mcp__acme__acme_search` → `{ server: 'acme', tool: 'acme_search' }`. */
 export function parseMcpToolName(name: string): { server: string; tool: string } | null {
   if (!name.startsWith('mcp__')) return null;
   const rest = name.slice('mcp__'.length);

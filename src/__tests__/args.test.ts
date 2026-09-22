@@ -89,8 +89,29 @@ describe('parseArgs', () => {
     ['--timeout', '-5'],
   ])('refuses %s %s rather than falling back to the default', (flag, value) => {
     const args = parseArgs([flag, value]);
-    expect(args.usageErrors).toEqual([`${flag} needs a positive number, not ${JSON.stringify(value)}.`]);
+    const whole = flag === '--timeout' ? '' : 'whole ';
+    expect(args.usageErrors).toEqual([`${flag} needs a positive ${whole}number, not ${JSON.stringify(value)}.`]);
     expect(args).toMatchObject({ top: 12, window: 10, timeoutMs: 10_000 });
+  });
+
+  it.each([
+    ['--top', '2.5'],
+    ['--window', '0.5'],
+  ])('refuses %s %s: a count of sessions is a whole number', (flag, value) => {
+    // `--window 0.5` was accepted and drew an empty window over a machine with a real first request.
+    const args = parseArgs([flag, value]);
+    expect(args.usageErrors).toEqual([`${flag} needs a positive whole number, not ${JSON.stringify(value)}.`]);
+    expect(args).toMatchObject({ top: 12, window: 10 });
+  });
+
+  it('accepts a fractional --timeout, which is seconds, not a count', () => {
+    expect(parseArgs(['--timeout', '0.5'])).toMatchObject({ timeoutMs: 500, usageErrors: [] });
+  });
+
+  it('refuses an empty --cwd, which would match every session on the machine under a blank title', () => {
+    const args = parseArgs(['--cwd', '']);
+    expect(args.usageErrors).toEqual(['--cwd needs a directory, not an empty string.']);
+    expect(args.cwd).toBeUndefined();
   });
 
   it('refuses two commands at once instead of silently running the first', () => {

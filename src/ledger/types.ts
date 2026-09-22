@@ -35,7 +35,7 @@ export type Verdict =
   /** Zero calls across a window we can defend. The only verdict that recommends removal. */
   | { kind: 'never-called'; sessions: number; window: string; scope: EvidenceScope }
   /**
-   * Called, but so rarely that the standing cost dwarfs the use. The verdict the plan's cost floor
+   * Called, but so rarely that the standing cost dwarfs the use. The verdict a cost floor
    * asks for: a server used once in 115 sessions is not earning its place just because it is not
    * at zero, and a rule that only looked for zero would miss the most expensive row on this
    * machine.
@@ -128,7 +128,7 @@ export interface LedgerRow {
    */
   basis: string | null;
   verdict: Verdict;
-  /** How you would turn it off, in words. M5 executes these. */
+  /** How you would turn it off, in words. `fix` executes these. */
   fix: string | null;
 }
 
@@ -144,7 +144,7 @@ export interface Finding {
   saves: number | null;
   fix: string | null;
   /**
-   * The same recommendation as data, for `--fix` to execute.
+   * The same recommendation as data, for `fix` to execute.
    *
    * 🔑 The prose and the actions are generated together, from the same branch, so the sentence a
    * reader confirms and the edit that lands cannot describe two different things. Empty when there
@@ -161,7 +161,7 @@ export interface Finding {
  * uncertainty in `unattributed` instead of smearing a `≈` across every number on the screen.
  */
 export interface Reconciliation {
-  /** Median cold-start context across the sessions in `window`. `null` if there are none. */
+  /** Median first-request context across the sessions in `window`. `null` if there are none. */
   total: number | null;
   window: string;
   sessions: number;
@@ -242,7 +242,7 @@ export interface Ledger {
    * same thing in a sentence; this is the pair of numbers behind it, for the receipt and `--json`.
    */
   neverReceived: { dropped: number; listed: number } | null;
-  /** Every finding's actions, merged. `--fix` reads this and nothing else. */
+  /** Every finding's actions, merged. `fix` reads this and nothing else. */
   actions: FixAction[];
   reconciliation: Reconciliation;
   machine: MachineEvidence;

@@ -31,7 +31,7 @@ const AXIS = 7;
 export interface SessionView {
   series: SessionSeries;
   /**
-   * What this session's own first request carried, when the transcript recorded a cold start. The
+   * What this session's own first request carried, when the transcript billed one. The
    * floor is compared with this and not with today's prefix: a session from last month ran under
    * last month's config, and setting its floor against this month's total compares two machines.
    */

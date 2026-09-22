@@ -26,6 +26,7 @@ import {
   countedInstructions,
   probeServer,
   redact,
+  secretsOf,
   serializeTool,
   unsentChars,
 } from '../measure/client.js';
@@ -33,6 +34,7 @@ import { FALLBACK_TABLE, fallbackFor, packageOf } from '../measure/fallback.js';
 import { measureContext } from '../measure/index.js';
 import { CALIBRATION, CHARS_PER_TOKEN, tokens } from '../measure/tokens.js';
 import type { McpLaunchSpec, ResolveResult, ResolvedConfig, ResolvedMcpServer } from '../resolve/types.js';
+import { PACKAGE_VERSION } from '../version.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/stdio-server.mjs', import.meta.url));
 
@@ -143,6 +145,12 @@ describe('the stdio client', () => {
     const result = await probeServer(stdioSpec('ok'), 15_000);
     expect(result.tools.map((tool) => tool.name)).toEqual(['alpha', 'beta']);
     expect(result.transport).toBe('stdio');
+  });
+
+  it('🚨 introduces itself with the installed version, not a constant left over from 0.1.0', async () => {
+    const result = await probeServer(stdioSpec('echo'), 5_000);
+    expect(result.instructions).toBe(`clientInfo ${JSON.stringify({ name: 'context-tax', version: PACKAGE_VERSION })}`);
+    expect(result.instructions).not.toContain('0.1.0');
   });
 
   it('🚨 counts the instructions blob, which is context the tools/list recipe misses', async () => {
@@ -342,6 +350,24 @@ describe('redaction', () => {
   it('leaves short values alone, which would shred the message without protecting anything', () => {
     expect(redact('exit code 1', ['1'])).toBe('exit code 1');
   });
+
+  it('🔒 counts the arguments as handed-over values too, all but the package a runner was told to run', () => {
+    // `npx mcp-remote <url> --header "Authorization: Bearer X"` is a common shape, and a launcher
+    // that fails echoes its argv to stderr, which becomes the row's reason on the main screen.
+    const spec = stdioSpec('crash', {
+      command: 'npx',
+      args: ['-y', 'mcp-remote', 'https://mcp.example.com/sse', '--header', 'Authorization: Bearer planted-arg-secret'],
+      env: { TOKEN: 'planted-env-secret' },
+      headers: { 'x-key': 'planted-header-secret' },
+    });
+    const secrets = secretsOf(spec);
+    expect(secrets).toContain('planted-env-secret');
+    expect(secrets).toContain('planted-header-secret');
+    expect(secrets).toContain('Authorization: Bearer planted-arg-secret');
+    expect(secrets).toContain('https://mcp.example.com/sse');
+    expect(secrets).not.toContain('mcp-remote');
+    expect(secrets).not.toContain('--header');
+  });
 });
 
 describe('what a probe leaves behind', () => {
@@ -442,6 +468,39 @@ describe('measureContext', () => {
     expect(row.tokens).toBeNull();
     expect(result.measuredTokens).toBe(0);
     expect(result.unmeasured).toBe(1);
+  });
+
+  it('🚨 reports a server whose url is not a URL as unmeasured, instead of throwing out of the whole run', async () => {
+    // `new URL()` used to run outside the try, reject the `Promise.all` and end every report with a
+    // stack trace. A `${VAR}` the environment did not fill is the common way to get here.
+    const bad = (url: string): McpLaunchSpec => ({ ...stdioSpec('ok'), transport: 'http', command: null, args: [], url });
+    for (const url of ['${API_BASE:-https://api.example.com}/mcp', '', '127.0.0.1:8080/mcp', 'not a url']) {
+      const launch = new Map([['fixture', bad(url)]]);
+      const result = await measureContext(resolved([serverRow({ transport: 'http' })], launch), { cacheDir });
+      expect(result.servers[0].status).toMatchObject({ kind: 'unmeasured', cause: 'failed' });
+      expect(result.contacted).toEqual([]);
+    }
+    const unfilled = new Map([['fixture', bad('${API_BASE}/mcp')]]);
+    const result = await measureContext(resolved([serverRow({ transport: 'http' })], unfilled), { cacheDir });
+    const status = result.servers[0].status;
+    expect(status).toMatchObject({ kind: 'unmeasured' });
+    if (status.kind !== 'unmeasured') return;
+    // Names the placeholder, never the URL: a URL is the string most likely to carry a token.
+    expect(status.reason).toContain('${API_BASE} is not set');
+    expect(status.reason).not.toContain('/mcp');
+  });
+
+  it('🔒 never prints a failed server\'s URL or a value it was handed in the reason', async () => {
+    // Node's fetch refuses a URL that carries credentials by quoting the whole URL back.
+    const url = 'http://user:planted-userinfo-pw@127.0.0.1:1/mcp/planted-path-secret';
+    const launch = new Map([['fixture', { ...stdioSpec('ok'), transport: 'http' as const, command: null, args: [], url, headers: { authorization: 'Bearer planted-header-secret' } }]]);
+    const result = await measureContext(resolved([serverRow({ transport: 'http' })], launch), { cacheDir, timeoutMs: 2_000 });
+    const status = result.servers[0].status;
+    expect(status).toMatchObject({ kind: 'unmeasured', cause: 'failed' });
+    if (status.kind !== 'unmeasured') return;
+    expect(status.reason).not.toContain('planted-userinfo-pw');
+    expect(status.reason).not.toContain('planted-path-secret');
+    expect(status.reason).not.toContain('planted-header-secret');
   });
 
   it('never starts a server the config has turned off', async () => {

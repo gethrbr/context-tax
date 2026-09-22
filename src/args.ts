@@ -93,13 +93,13 @@ export const HELP = `
     --svg <file>    session: write the picture as an image you can post
 
   No telemetry, no model call, and no context-tax server for anything to be sent
-  to. The measure command performs the same tools/list handshake your agent
+  to. Every measuring command performs the same tools/list handshake your agent
   performs at the start of every session, against the servers already in your
-  own config, and prints every host it spoke to.
+  own config, and says what it started and which hosts it contacted.
 
-  fix is the only command that writes. It edits settings files, backs up what it
-  replaces to ~/.cache/context-tax/backups/, and never touches ~/.claude.json,
-  which sits beside your API keys.
+  fix is the only command that writes to your settings. It edits settings
+  files, backs up what it replaces to ~/.cache/context-tax/backups/, and never
+  touches ~/.claude.json, which sits beside your API keys.
 `;
 
 /**
@@ -107,10 +107,10 @@ export const HELP = `
  * answered `--top ten` with 12 and said nothing, so the user read a number they had not asked for
  * and had no way to tell.
  */
-function positiveNumber(raw: string, flag: string, errors: string[]): number | undefined {
+function positiveNumber(raw: string, flag: string, errors: string[], whole = false): number | undefined {
   const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    errors.push(`${flag} needs a positive number, not ${JSON.stringify(raw)}.`);
+  if (!Number.isFinite(value) || value <= 0 || (whole && !Number.isInteger(value))) {
+    errors.push(`${flag} needs a positive ${whole ? 'whole ' : ''}number, not ${JSON.stringify(raw)}.`);
     return undefined;
   }
   return value;
@@ -194,7 +194,10 @@ export function parseArgs(argv: string[]): Args {
         const raw = valueAfter(i, arg);
         if (raw === undefined) break;
         i += 1;
-        args.cwd = raw;
+        // An empty string resolves to the current directory in `path.resolve` but to every session
+        // on the machine in a prefix match, with a blank title over the lot.
+        if (raw.trim() === '') usageErrors.push('--cwd needs a directory, not an empty string.');
+        else args.cwd = raw;
         break;
       }
       case '--top':
@@ -203,7 +206,8 @@ export function parseArgs(argv: string[]): Args {
         const raw = valueAfter(i, arg);
         if (raw === undefined) break;
         i += 1;
-        const parsed = positiveNumber(raw, arg, usageErrors);
+        // A count of sessions is a whole number; `--window 0.5` was accepted and drew an empty window.
+        const parsed = positiveNumber(raw, arg, usageErrors, arg !== '--timeout');
         if (parsed === undefined) break;
         if (arg === '--top') args.top = parsed;
         else if (arg === '--window') args.window = parsed;

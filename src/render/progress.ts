@@ -24,12 +24,17 @@ const FALLBACK_WIDTH = 80;
 export interface Progress {
   /** Replace the label. Safe to call before, during or after the spinner is running. */
   set(text: string): void;
+  /**
+   * Leave a line on the screen for good, above the spinner. The spinner's frames are erased; this
+   * is what stays, and it is how a run that started servers says so where the reader can see it.
+   */
+  note(text: string): void;
   /** Erase the line and stop. Idempotent, because the error path and the happy path both call it. */
   done(): void;
 }
 
 /** A progress display that draws nothing, for every case where drawing would be wrong. */
-const SILENT: Progress = { set: () => {}, done: () => {} };
+const SILENT: Progress = { set: () => {}, note: () => {}, done: () => {} };
 
 interface Stream {
   isTTY?: boolean;
@@ -75,6 +80,12 @@ export function progress(stream: Stream = process.stderr, enabled = stream.isTTY
       label = text;
       paint();
     },
+    note: (text: string): void => {
+      // Erase the frame, write the line with its own newline, then repaint below it.
+      stream.write(`\r${' '.repeat(painted)}\r${text}\n`);
+      painted = 0;
+      if (!stopped) paint();
+    },
     done: (): void => {
       if (stopped) return;
       stopped = true;
@@ -83,6 +94,19 @@ export function progress(stream: Stream = process.stderr, enabled = stream.isTTY
       painted = 0;
     },
   };
+}
+
+/**
+ * What a run started and who it contacted, as one line that stays on the screen.
+ *
+ * `measure` prints this in its report. The default command, `receipt` and `fix` start the same
+ * servers, and a promise you cannot check is not a promise, so they say it here as they run.
+ */
+export function startedLine(spawned: readonly string[], contacted: readonly string[]): string {
+  const names = (list: readonly string[]): string => [...new Set(list)].sort().join(', ');
+  const started = spawned.length === 0 ? 'started nothing' : `started ${names(spawned)}`;
+  const reached = contacted.length === 0 ? 'contacted nothing over the network' : `contacted ${names(contacted)}`;
+  return `  ${started} · ${reached}`;
 }
 
 /**

@@ -7,7 +7,7 @@
  * configured*, and it has to be printed — `0 calls in 41 sessions since this server was added` is a
  * finding; `never used` is an accusation.
  *
- * ⚠️ **git, never mtime.** The plan originally said mtime. `git checkout` rewrites mtimes, so on a
+ * ⚠️ **git, never mtime.** The obvious choice is mtime. `git checkout` rewrites mtimes, so on a
  * fresh clone every server looks added today and the guard inverts: the tool goes quiet exactly
  * when it should speak, and loud on nothing. `git log -S` asks the only question that survives a
  * clone — which commit first introduced this string into this file.

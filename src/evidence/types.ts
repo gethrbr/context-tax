@@ -145,9 +145,10 @@ export interface SessionEvidence {
    */
   sidechainTurns: number;
   /**
-   * The first request that read nothing from cache, so its total is the whole prompt: system
-   * prompt, tools, memory files and the first user message. `null` if every request in the file
-   * was a cache hit, which happens for resumed sessions.
+   * What the session's first billed request carried: the whole prompt, which is the fixed prefix
+   * (system prompt, tools, listings, instruction files) plus the first user message. The usage
+   * total is the same whether the cache served it or not. `null` only when no request was billed.
+   * The name is older than the rule: it once meant the first request that read nothing from cache.
    */
   coldStartTokens: number | null;
   /** Sum of `input + cache_creation + cache_read` over every turn. Exact: it is what was billed. */

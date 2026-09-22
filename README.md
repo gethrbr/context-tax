@@ -37,7 +37,7 @@ anything to be sent to.
 
 |  |  |
 |:--|:--|
-| **Read, not modelled** | Rows come from what your last session sent, measured on the text itself. The per-turn total comes from the `usage` your API calls were billed on |
+| **Read, not modelled** | Rows come from what a recent session sent, measured on the text itself. The per-turn total comes from the `usage` your API calls were billed on |
 | **What your agent never received** | Past its budget, Claude Code sends a skill as a bare name with no description. This counts them, says whose they are, and prices sending them all |
 | **Cost per *use*, not per turn** | A 400-token server used once in 96 sessions cost you 17M tokens, and that is the number that changes minds |
 | **It writes the fix** | `context-tax fix` routes each finding to the lever that actually turns that thing off |
@@ -115,7 +115,7 @@ anything to be sent to.
     its 14 tools, its system prompt, its tool name list, its session details:
       sent by Claude Code itself on every turn, so there is nothing here to
       switch off
-    EVERY TURN is exact, from usage. Median cold start across your 10 most
+    EVERY TURN is exact, from usage. Median first request across your 10 most
     recent sessions, 2026-08-24 to 2026-09-01.
     Rows are what your session of 2026-09-01 sent, read from its transcript. A
     row that says otherwise was weighed from your config.
@@ -148,8 +148,9 @@ anything to be sent to.
     4. linear is loaded on every turn and used in 3 of 96 sessions on this
        machine
        300 tokens re-sent across 42,900 turns for 3 calls: 4,290,000 tokens of
-       standing cost per use. Loading its schemas costs 2,540 tokens more, every
-       time something does.
+       standing cost per use, counted over every session on record because
+       nothing says when this was added, so read it as an upper bound. Loading
+       its schemas costs 2,540 tokens more, every time something does.
        fix: claude mcp remove linear -s user
     5. sentry is loaded on every turn and used in 1 of 96 sessions
        400 tokens re-sent across 42,900 turns for 1 call: 17,160,000 tokens of
@@ -168,7 +169,7 @@ anything to be sent to.
     7. 13 skills never invoked, either way
        The listing is over its budget, so most of what this frees goes to
        another description rather than out of the prompt. changelog-writer,
-       commit-helper, design-review, ...
+       commit-helper, db-migrate, ...
        fix: set each to off in skillOverrides, or delete the ones you do not
        recognise
 
@@ -261,9 +262,6 @@ something you asked for by name.
 npx context-tax receipt
 ```
 
-The main screen names your servers, plugins and paths, because you are about to edit them. The
-receipt is for everyone else. It carries kinds and numbers, and not one name.
-
 ```
                    CONTEXT TAX
        sent on every turn, before you type
@@ -282,7 +280,7 @@ receipt is for everyone else. It carries kinds and numbers, and not one name.
   TOTAL PER TURN                          40,000
   20% of a window of about 200,000 tokens
   ----------------------------------------------
-  PAID                              42,900 turns
+  SO FAR                            42,900 turns
                              1.7B tokens carried
   RECOVERABLE PER TURN                     1,900
   ----------------------------------------------
@@ -358,21 +356,33 @@ describes, so what you confirm is the diff itself.
 
     ~/projects/storefront/.claude/settings.local.json
       disable the figma MCP server
-        0 calls in 96 sessions since it was configured.
+        figma costs 300 tokens every turn and has never been called in 96
+        sessions since it was configured.
       disable the sentry MCP server
-        1 call in 96 sessions: 17,160,000 tokens of standing cost per use.
+        sentry costs 400 tokens every turn for 1 call in 96 sessions: 17,160,000
+        tokens of standing cost per use.
       set the changelog-writer skill to off
-        Never invoked by you or by the model in 96 sessions.
+        changelog-writer has not been invoked in 96 sessions here, by you or by
+        the model.
       set the design-review skill to user-invocable-only
-        You have run /design-review, but the model has never chosen it. This
-        keeps the slash command and drops the description from the prompt.
+        design-review has only ever been typed as /design-review, never chosen
+        by the model. This keeps the slash command and drops the description
+        from the prompt.
 
-      @@ -2,5 +2,10 @@
+      @@ -1,6 +1,17 @@
+        {
           "permissions": {
-            "allow": ["Bash(npm run test:*)", "Read(./src/**)"],
+      -     "allow": ["Bash(npm run test:*)", "Read(./src/**)"],
+      +     "allow": [
+      +       "Bash(npm run test:*)",
+      +       "Read(./src/**)"
+      +     ],
             "deny": []
       +   },
-      +   "disabledMcpjsonServers": ["figma", "sentry"],
+      +   "disabledMcpjsonServers": [
+      +     "figma",
+      +     "sentry"
+      +   ],
       +   "skillOverrides": {
       +     "changelog-writer": "off",
       +     "design-review": "user-invocable-only"
@@ -385,9 +395,9 @@ describes, so what you confirm is the diff itself.
     that file nor backs it up: a backup would be a second copy of every
     credential.
 
-    linear: 3 calls in 96 sessions on this machine, 4,290,000 tokens of
-    standing cost per use.
-    It is declared in ~/.claude.json, which this tool does not write.
+    linear costs 300 tokens every turn for 3 calls, counted over every session
+    on record because nothing says when it was added. It is declared in
+    ~/.claude.json, which this tool does not write.
       claude mcp remove linear -s user
 
   700 tokens per turn recovered by the changes above.
@@ -403,6 +413,11 @@ because this listing is over its budget: the room a skill gives up goes to a des
 being dropped, not out of the prompt. That is the better outcome and a smaller number, and the
 number printed is the one the change delivers.
 
+And notice the `allow` array. Nothing asked for it to change, and the diff shows it anyway: `fix`
+rewrites the whole file with two-space indentation, so an array you wrote on one line comes back
+one element per line. It is the one change in the diff you did not ask for, and it is in the diff
+so you see it before you say yes. The file is written with mode `0600`.
+
 ### 2. It asks
 
 ```
@@ -414,7 +429,7 @@ number printed is the one the change delivers.
 ```
   Written.
     ~/projects/storefront/.claude/settings.local.json
-      previous contents: ~/.cache/context-tax/b…s/settings.local.json.2026-09-02
+      previous contents: ~/.cache/context-tax/b…ront-.claude-settings.local.json
 
   Restore any of them by copying the backup back over the file.
 ```
@@ -429,16 +444,19 @@ while looking like it worked.
 | `<repo>/.mcp.json` | adds it to `disabledMcpjsonServers` in `.claude/settings.local.json` |
 | `~/.claude.json` | **prints `claude mcp remove <name> -s <scope>` for you to run** |
 | a plugin | sets `enabledPlugins["<plugin>@<marketplace>"]: false`, scoped to this project |
-| a skill | writes the right one of the four `skillOverrides` states |
+| a skill | writes `off`, or `user-invocable-only` when you type it and the model never picks it |
 | a claude.ai connector, or anything else no file declares | **says where it is switched off**, because there is no file here to edit |
 | skills sent with no description | `--restore-descriptions` sets `skillListingBudgetFraction`, and only when you pass it |
 
 ### The rails on the write path
 
-`fix` is a subcommand rather than a flag, on purpose. It is the only part of this package that
-writes, and it should not be reachable by adding one word to a command you ran for a report.
+`fix` is a subcommand rather than a flag, on purpose. It is the only command that writes to your
+settings, and it should not be reachable by adding one word to a command you ran for a report. (Two
+other things write, and neither is a setting: `session --svg` writes the image file you name, and
+every measuring command caches what your servers answered under `~/.cache/context-tax/`.)
 
-- **Plans without touching disk**, which is what makes `--dry-run` worth trusting
+- **Plans without touching your settings**, which is what makes `--dry-run` worth trusting. It still
+  starts your servers to measure them, the same as the report does
 - **Refuses to write when stdin is not a terminal** unless you pass `--yes`. A CLI that writes to a
   config file because it could not find anyone to ask is a CLI that writes to config files in CI
 - **Backs up every file it replaces** to `~/.cache/context-tax/backups/`, directory `0700`, files `0600`
@@ -507,10 +525,13 @@ The rows come from the record when a session kept one. `measure` still runs, for
 record cannot say: the `deferred` column, which is the schemas a session never loaded, and any server
 or machine with no recorded session to read.
 
-To measure a server you have to start it. So `measure` prints every host it spoke to, caches schemas
-for a week keyed on the **names** of your environment variables and never their values, and **will
-not start a project server from a directory you are not standing in**, since running one executes
-code from a repo you only pointed at.
+To measure a server you have to start it. So every command that measures says what it started and
+which hosts it contacted: `measure` in its report, and the report, `receipt` and `fix` on stderr as
+they run. Schemas are cached for a week keyed on the **names** of your environment variables and
+never their values, `${VAR}` and `${VAR:-default}` in a server definition are filled in the way
+Claude Code fills them, and **no project server is started from a directory you are not standing
+in**, since running one executes code from a repo you only pointed at. `--no-spawn` starts no
+server at all; it still runs `git log` to date your config.
 
 Starting them is also where the ten seconds goes, so a run tells you which server it is waiting on
 while it waits. That line is written to stderr and only when stderr is a terminal, so `--json`,
@@ -608,8 +629,8 @@ because no session here recorded its listing*, with the window it guessed and wh
 Two things follow either way. Past the budget, switching a few skills off recovers close to nothing,
 because the room goes to another description, so a saving here is always the listing before minus the
 listing after. And only a skill with a lever counts as recoverable: a plugin skill in a plugin you
-use has no switch, and a number promised for it is a number `fix` can never deliver. The headline
-and the `fix` plan are the same figure for that reason.
+use has no switch, and a number promised for it is a number `fix` can never deliver. For skills, the
+headline and the `fix` plan are the same figure for that reason.
 
 </details>
 
@@ -680,13 +701,17 @@ whole of its network activity, and all of it is to hosts you chose.
   read of files you already have: nothing is uploaded, cached off-machine or written back.
 - **What was sent is measured, not kept.** The transcript record holds the full text of your
   instruction files and skill descriptions. The parser takes lengths, counts and names from it and
-  drops the text on the same line, so none of it reaches the report, `--json`, or the library API.
-  A test asserts that.
+  drops the text on the same line, so none of the text a session sent reaches the report, `--json`,
+  or the library API. A test asserts that. (The descriptions of the skills and agents on your disk
+  are read as files, and `config --json` carries those.)
 - **The receipt and the session image carry no names.** Not a server, plugin, skill, path, project or
   session id. They are the two screens made to be posted, and both are pinned by a test.
 - **No model call.** Every verdict is arithmetic.
-- **No credentials read or copied.** Schema caching is keyed on the *names* of environment
-  variables, never their values, and `~/.claude.json` is never written or backed up.
+- **Credentials go to the server they belong to, and nowhere else.** A server's `env`, headers and
+  arguments are handed to that server to start it, never printed, and never cached: schema caching
+  is keyed on the *names* of environment variables, a URL is printed as its scheme and host, and a
+  failing server's output is scrubbed of every value it was given. `~/.claude.json` is never
+  written or backed up.
 - **`fetch` appears in exactly one file**, which is the file that documents why.
 
 #### Zero dependencies, and a test that proves it
@@ -709,7 +734,10 @@ const cwd = process.cwd();
 
 const resolved = await resolveConfig({ cwd });
 const evidence = await scanEvidence({ cwd });
-const measured = await measureContext(resolved, { cwd });
+// Starts the servers in the config, the same handshake your agent performs. The CLI refuses to
+// start a project's servers from a directory you are not standing in; the library leaves that to
+// you, so pass `trustProjectServers: false` when `cwd` is somewhere you only pointed at.
+const measured = await measureContext(resolved);
 
 const ledger = buildLedger(resolved, measured, evidence);
 
@@ -755,9 +783,9 @@ No. The `resolve` and `evidence` passes read Claude Code's config chain and tran
 <summary><b>Will it break my setup?</b></summary>
 <br>
 
-Only `fix` writes, only after showing you the diff and asking, and it copies every file it replaces
-to `~/.cache/context-tax/backups/` first. Restoring is a `cp`. It will not touch `~/.claude.json` at
-all.
+Only `fix` writes to your settings, only after showing you the diff and asking, and it copies every
+file it replaces to `~/.cache/context-tax/backups/` first. Restoring is a `cp`. It will not touch
+`~/.claude.json` at all.
 
 </details>
 
@@ -817,7 +845,7 @@ each was found by running the tool against real projects rather than by reading 
 repeating as a rule, because it is the trap this whole category of tool falls into: **a finding the
 tool cannot defend line by line is a bug in the tool.**
 
-Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Contributions are welcome. See [CONTRIBUTING.md](https://github.com/gethrbr/context-tax/blob/main/CONTRIBUTING.md).
 
 <br>
 
@@ -825,7 +853,7 @@ Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 <div align="center">
 
-[MIT](./LICENSE) · [Report an issue](https://github.com/gethrbr/context-tax/issues) · [Changelog](./CHANGELOG.md)
+[MIT](./LICENSE) · [Report an issue](https://github.com/gethrbr/context-tax/issues) · [Changelog](https://github.com/gethrbr/context-tax/blob/main/CHANGELOG.md)
 
 <sub>Built by the team behind [Harbor](https://gethrbr.com), a shared brain for your team's agents.</sub>
 
