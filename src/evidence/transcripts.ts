@@ -2,10 +2,11 @@
  * Finding the session files.
  *
  * Claude Code writes one JSONL per session under `~/.claude/projects/<slug>/`, where the slug is
- * the working directory with every `/` replaced by `-`. That mapping is **lossy**: a directory
- * whose own name contains a dash is indistinguishable from a path separator, so the slug can never
- * be reversed into a path with confidence. We read the real `cwd` out of the records instead and
- * treat the slug as nothing more than a filesystem bucket.
+ * the working directory with every character that is not an ASCII letter or digit replaced by `-`
+ * (see `projectSlug`). That mapping is **lossy**: a directory whose own name contains a dash, a dot
+ * or a space is indistinguishable from a path separator, so the slug can never be reversed into a
+ * path with confidence. We read the real `cwd` out of the records instead and treat the slug as
+ * nothing more than a filesystem bucket.
  *
  * 🚨 **Subagent transcripts are NOT in the session file.** They are written to
  * `<slug>/<session-id>/subagents/*.jsonl`, one level deeper. A scan that reads only the top level
@@ -22,6 +23,43 @@ import { join } from 'node:path';
 
 export function defaultProjectsDir(): string {
   return join(homedir(), '.claude', 'projects');
+}
+
+/** Claude Code's cap on a bucket name. A longer one is cut here and a hash of the full path appended. */
+const SLUG_MAX = 200;
+
+/** Java's `String.hashCode`, which is the hash Claude Code appends to a cut slug. */
+function pathHash(path: string): number {
+  let hash = 0;
+  for (let i = 0; i < path.length; i++) hash = ((hash << 5) - hash + path.charCodeAt(i)) | 0;
+  return hash;
+}
+
+/**
+ * The bucket Claude Code writes a directory's sessions and memory into.
+ *
+ * 🚨 Copied from the client (2.1.292), not inferred from one machine's folder names. Every
+ * character that is not an ASCII letter or digit becomes `-`: dots, underscores, spaces, and on
+ * Windows the drive colon and every backslash. Replacing only `/`, as this did until 0.4.1, missed
+ * every project whose path held any of those, `~/my_app` and `~/.config/x` alike, and reported
+ * "no session history" for a directory that had plenty. The regex has no `u` flag on purpose: the
+ * client's has none, so a character outside the BMP becomes two dashes there and must here too.
+ */
+export function projectSlug(cwd: string): string {
+  const slug = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  if (slug.length <= SLUG_MAX) return slug;
+  return `${slug.slice(0, SLUG_MAX)}-${Math.abs(pathHash(cwd)).toString(36)}`;
+}
+
+/**
+ * What every bucket for this directory, or for any directory under it, starts with.
+ *
+ * The slug is built character by character, so a subdirectory's slug begins with its parent's.
+ * The one exception is the cap: past 200 characters the tail is a hash of the whole path, which
+ * differs per directory, so the prefix stops where the cut does.
+ */
+export function projectSlugPrefix(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-').slice(0, SLUG_MAX);
 }
 
 /** A subagent's turns are billed like any other, but they are not a session a human started. */
