@@ -13,7 +13,7 @@
  */
 
 import type { Palette } from './color.js';
-import { hangingText, screenWidth, shortPath, wrapClamped } from './layout.js';
+import { hangingText, screenWidth, shortenHome, shortPath, wrapClamped } from './layout.js';
 import type { Cell, Column, Section } from './table.js';
 import { renderTable } from './table.js';
 import {
@@ -225,7 +225,7 @@ export function renderConfig(
     line();
     line(`  ${colour.bold('PROBLEMS')}  ${colour.dim(`${n(config.problems.length)}`)}`);
     for (const problem of config.problems) {
-      say(problem.message, 4, colour.yellow);
+      say(shortenHome(problem.message), 4, colour.yellow);
       say(shortPath(problem.path, width - 6), 6, colour.dim, 2);
     }
   }

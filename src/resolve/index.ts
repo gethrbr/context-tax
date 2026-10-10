@@ -101,7 +101,7 @@ export async function resolveConfig(options: ResolveOptions = {}): Promise<Resol
 }
 
 export { configuredSince, repoRootOf, sessionsSince } from './since.js';
-export { projectSlug } from './memory.js';
+export { projectSlug } from '../evidence/transcripts.js';
 export { managedSettingsPath } from './settings.js';
 export { parseFrontmatter, safeUrl, entryArgument, expandEnv } from './read.js';
 export type {

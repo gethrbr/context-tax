@@ -16,21 +16,12 @@ import type { Dirent } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
+import { projectSlug } from '../evidence/transcripts.js';
+
 import type { MemoryFile } from './types.js';
 
 /** Directories a walk should never enter. Cheap, and the difference between 40 ms and a minute. */
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', '.venv']);
-
-/**
- * The transcript bucket for a directory: the path with every `/` replaced by `-`.
- *
- * Building the slug forward is deterministic. Reading it backwards is not — a directory whose own
- * name contains a dash is indistinguishable from a separator — which is why `evidence/` never
- * tries, and why this is the only place the mapping is used.
- */
-export function projectSlug(cwd: string): string {
-  return cwd.replace(/\//g, '-');
-}
 
 async function sizeOf(path: string): Promise<number | null> {
   try {

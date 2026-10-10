@@ -23,7 +23,7 @@ import type {
 } from '../ledger/types.js';
 import { PROVISIONAL_NOTE } from '../measure/tokens.js';
 import type { Palette } from './color.js';
-import { hangingText, screenWidth, shortPath, wrapClamped, wrapInstruction } from './layout.js';
+import { hangingText, screenWidth, shortenHome, shortPath, wrapClamped, wrapInstruction } from './layout.js';
 import type { Cell, Column, Section } from './table.js';
 import { renderTable } from './table.js';
 
@@ -291,7 +291,7 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
     line();
     line(`  ${colour.bold('PROBLEMS')}`);
     for (const problem of ledger.problems) {
-      say(problem.message, 4, colour.yellow);
+      say(shortenHome(problem.message), 4, colour.yellow);
       say(shortPath(problem.path, width - 6), 6, colour.dim, 2);
     }
   };
