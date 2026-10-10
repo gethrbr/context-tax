@@ -8,6 +8,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -435,6 +436,26 @@ describe('a machine with nothing on it', () => {
     expect(screen).toContain('NOTHING TO MEASURE HERE');
     expect(screen).toContain('PROBLEMS');
     expect(screen).toContain('unsupported_protocol_version');
+  });
+
+  // The path under a problem was shortened and a path inside its sentence was not, so the screen
+  // a reader screenshots spelled out their home directory, username included, one line above `~`.
+  it('shortens the home directory inside a problem message, not only under it', () => {
+    const screen = renderLedger(
+      {
+        ...nothingLedger(),
+        problems: [
+          {
+            path: join(homedir(), '.claude.json'),
+            message: `"acme" is also declared in ${join(homedir(), '.claude.json')} (claude-json-project), which wins`,
+          },
+        ],
+      },
+      plain,
+      80,
+    );
+    expect(screen).toContain('declared in ~/.claude.json');
+    expect(screen).not.toContain(homedir());
   });
 });
 
