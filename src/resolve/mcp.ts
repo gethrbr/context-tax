@@ -52,11 +52,14 @@ interface Candidate {
 /**
  * Pull `mcpServers` out of a file.
  *
- * ⚠️ **A `.mcp.json` with no `mcpServers` key is reported, not guessed at.** One public plugin
- * ships one whose server sits at the top level, unwrapped. Reading it anyway would invent a server,
- * and the evidence says Claude Code does not load it either: with that plugin enabled, none of its
- * tools ever appeared in a transcript. So it becomes a problem with the file named, which is the
- * one form of this that helps.
+ * 🚨 **A plugin's `.mcp.json` may hold its servers at the top level, unwrapped**, and Claude Code
+ * loads them: the client's plugin loader reads `mcpServers` when present and the root otherwise,
+ * and a probe plugin whose file was `{ "srv": { "url": ... } }` was connected as
+ * `plugin:<plugin>:srv` (2.1.292). Until 0.4.1 this called that file "not loaded", on evidence
+ * that was confounded: the one public plugin shipping it was installed for another project.
+ *
+ * ⚠️ Anywhere else, a file with no `mcpServers` key is reported, not guessed at. The client's
+ * schema for a project `.mcp.json` requires the key, so reading the root would invent a server.
  */
 function serversFrom(
   json: Record<string, unknown> | null,
@@ -67,6 +70,13 @@ function serversFrom(
 ): Candidate[] {
   if (json === null) return [];
   const servers = asRecord(json.mcpServers);
+  if (servers === null && scope === 'plugin') {
+    // At the root, a key that is not an object (a `$schema`, say) is not a server and not a fault.
+    return Object.entries(json).flatMap(([name, definition]) => {
+      const record = asRecord(definition);
+      return record === null ? [] : [{ name, definition: record, scope, path, plugin }];
+    });
+  }
   if (servers === null) {
     const looksLikeServers = Object.values(json).some(
       (value) => asRecord(value) !== null && ('command' in (value as object) || 'url' in (value as object)),
