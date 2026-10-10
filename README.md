@@ -10,6 +10,7 @@ used, and which of it never reached your agent at all.**
 [![dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen?style=flat-square)](#zero-dependencies-and-a-test-that-proves-it)
 [![node](https://img.shields.io/node/v/context-tax?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
+[![Mentioned in Awesome Claude Code](https://img.shields.io/badge/awesome-claude%20code-fc60a8?style=flat-square&logo=awesomelists&logoColor=white)](https://github.com/hesreallyhim/awesome-claude-code)
 
 ```bash
 npx context-tax

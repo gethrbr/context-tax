@@ -407,6 +407,26 @@ describe('mcp servers', () => {
   });
 
   /**
+   * 🚨 The client's plugin loader reads the root when `mcpServers` is absent, and a probe plugin
+   * shipped that way was connected (2.1.292). This used to call it "not loaded" and drop it.
+   */
+  it('reads a plugin .mcp.json whose servers sit at the top level, unwrapped', async () => {
+    const installPath = join(root, 'plugins', 'thing');
+    await write(join(installPath, '.mcp.json'), {
+      $schema: 'https://example.com/mcp.schema.json',
+      gamma: { type: 'http', url: 'https://gamma.example/mcp' },
+    });
+    await write(join(home, '.claude', 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'thing@market': [{ scope: 'user', installPath, installedAt: '2026-01-02T00:00:00Z' }] },
+    });
+
+    const { config } = await resolve();
+    expect(config.mcpServers.map((server) => [server.name, server.scope])).toEqual([['gamma', 'plugin']]);
+    expect(config.problems.some((problem) => problem.message.includes('mcpServers'))).toBe(false);
+  });
+
+  /**
    * 🚨 A plugin's `.mcp.json` sits inside the plugin author's own checkout, so `git log` there
    * answers when THEY added the server, which in practice dates a plugin's servers months before
    * the plugin was ever installed locally. The registry's install date is the one that means

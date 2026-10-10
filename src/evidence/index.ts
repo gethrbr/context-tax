@@ -2,7 +2,13 @@ export { scanEvidence, parseMcpToolName, extractSlashCommands, type ScanOptions 
 export { parseSkillListing } from './record.js';
 export { toolPrefixName, transcriptKeysFor } from './names.js';
 export { readSessionSeries, summarize, downsample, type SessionSeries, type SeriesSummary } from './series.js';
-export { defaultProjectsDir, findTranscripts, type TranscriptFile } from './transcripts.js';
+export {
+  defaultProjectsDir,
+  findTranscripts,
+  projectSlug,
+  projectSlugPrefix,
+  type TranscriptFile,
+} from './transcripts.js';
 export type {
   ColdStart,
   Evidence,

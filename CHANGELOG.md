@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- 🚨 **A directory whose path holds a dot, an underscore, a space or any other non-alphanumeric
+  character has its sessions found.** Claude Code files a directory's sessions under its path with
+  every character that is not an ASCII letter or digit turned into `-`, and cuts a name past 200
+  characters with a hash of the full path appended. This replaced only `/`, so `context-tax
+  session` in `~/my_app` or in a worktree under `.claude/` said there was no session history,
+  and the auto-memory file of such a project was never found. The rule is now the client's own,
+  checked against folders Claude Code 2.1.292 created, the hashed case included.
+
+- 🚨 **A plugin whose `.mcp.json` puts its servers at the top level is read.** Claude Code loads
+  that layout from a plugin, with or without the `mcpServers` wrapper, and a probe plugin shipped
+  that way was connected by 2.1.292. This reported such a file as "not loaded" under PROBLEMS and
+  left its servers out. A project `.mcp.json` still needs the wrapper, as the client's schema
+  requires, and is still reported without one.
+
+- 🔒 **A path inside a PROBLEMS sentence starts with `~`**, like the path printed under it. The
+  sentence spelled out the home directory, username included.
+
 ## 0.4.1
 
 An audit of the published package, run against fabricated machines that look nothing like the one

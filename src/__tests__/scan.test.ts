@@ -23,7 +23,13 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { extractSlashCommands, parseMcpToolName, scanEvidence } from '../evidence/index.js';
+import {
+  extractSlashCommands,
+  parseMcpToolName,
+  projectSlug,
+  projectSlugPrefix,
+  scanEvidence,
+} from '../evidence/index.js';
 
 interface UsageOverrides {
   input?: number;
@@ -343,6 +349,83 @@ describe('scanEvidence', () => {
     const evidence = await scanEvidence({ projectsDir: join(tmpdir(), 'context-tax-absent-xyz') });
 
     expect(evidence).toMatchObject({ scannedFiles: 0, malformedLines: 0, projects: [] });
+  });
+});
+
+/**
+ * 🚨 The folder Claude Code files a directory's sessions under. Every expected value below came
+ * out of the client's own slug function (2.1.292), run on these paths, and the implementation was
+ * checked against folders the client created. Replacing only `/` passed every test this file had,
+ * because every fixture path was `/repo`, and told anyone in `~/my_app` they had no sessions.
+ */
+describe('projectSlug', () => {
+  it('turns every character that is not an ASCII letter or digit into a dash', () => {
+    expect(projectSlug('/Users/somebody/my_app.v2')).toBe('-Users-somebody-my-app-v2');
+    expect(projectSlug('/Users/somebody/My Project')).toBe('-Users-somebody-My-Project');
+    expect(projectSlug('/Users/somebody/.config/tool')).toBe('-Users-somebody--config-tool');
+  });
+
+  it('covers a Windows path, drive colon and backslashes included', () => {
+    expect(projectSlug('C:\\Users\\somebody\\My Project')).toBe('C--Users-somebody-My-Project');
+  });
+
+  it('turns an accented letter into one dash and a character outside the BMP into two', () => {
+    expect(projectSlug('/Users/somebody/caf\u00e9/\u{1F680}')).toBe('-Users-somebody-caf----');
+  });
+
+  it('cuts a slug past 200 characters and appends the hash the client appends', () => {
+    const long = `/Users/somebody/work/my_app.v2/${'a'.repeat(120)}/${'b'.repeat(80)}`;
+
+    expect(projectSlug(long)).toBe(`${projectSlug(long.slice(0, 200))}-kglwgx`);
+    expect(projectSlug(`${long}/pkg`)).toBe(`${projectSlug(long.slice(0, 200))}-d59fvm`);
+  });
+
+  it('gives a prefix every bucket under the directory starts with, long or short', () => {
+    const long = `/Users/somebody/work/my_app.v2/${'a'.repeat(120)}/${'b'.repeat(80)}`;
+    for (const root of ['/Users/somebody/my_app.v2', long]) {
+      expect(projectSlug(root).startsWith(projectSlugPrefix(root))).toBe(true);
+      expect(projectSlug(`${root}/packages/api`).startsWith(projectSlugPrefix(root))).toBe(true);
+    }
+  });
+});
+
+describe('scanEvidence({ cwd })', () => {
+  async function bucketFixture(buckets: Record<string, string>) {
+    const root = await mkdtemp(join(tmpdir(), 'context-tax-'));
+    for (const [slug, cwd] of Object.entries(buckets)) {
+      await mkdir(join(root, slug), { recursive: true });
+      await writeFile(
+        join(root, slug, 'session.jsonl'),
+        `${assistant([], { cacheCreation: 10 }, { cwd })}\n`,
+      );
+    }
+    return root;
+  }
+
+  it('🚨 finds the sessions of a directory whose path holds a dot, an underscore or a space', async () => {
+    const cwd = '/Users/somebody/my_app.v2 copy';
+    const projectsDir = await bucketFixture({
+      [projectSlug(cwd)]: cwd,
+      [projectSlug(`${cwd}/packages/api`)]: `${cwd}/packages/api`,
+      [projectSlug('/Users/somebody/other')]: '/Users/somebody/other',
+    });
+
+    const evidence = await scanEvidence({ projectsDir, cwd });
+
+    expect(evidence.sessions).toHaveLength(2);
+    expect(evidence.scannedFiles).toBe(2);
+  });
+
+  it('finds the sessions of a directory whose slug the client cut and hashed', async () => {
+    const cwd = `/Users/somebody/work/my_app.v2/${'a'.repeat(120)}/${'b'.repeat(80)}`;
+    const projectsDir = await bucketFixture({
+      [projectSlug(cwd)]: cwd,
+      [projectSlug(`${cwd}/pkg`)]: `${cwd}/pkg`,
+    });
+
+    const evidence = await scanEvidence({ projectsDir, cwd });
+
+    expect(evidence.sessions).toHaveLength(2);
   });
 });
 

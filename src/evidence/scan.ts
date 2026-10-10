@@ -33,7 +33,12 @@ import type {
   SessionEvidence,
   SkillUsage,
 } from './types.js';
-import { defaultProjectsDir, findTranscripts, type TranscriptKind } from './transcripts.js';
+import {
+  defaultProjectsDir,
+  findTranscripts,
+  projectSlugPrefix,
+  type TranscriptKind,
+} from './transcripts.js';
 
 export { parseMcpToolName } from './names.js';
 
@@ -356,12 +361,12 @@ function finalizeColdStart(values: number[]): ColdStart | null {
 export async function scanEvidence(options: ScanOptions = {}): Promise<Evidence> {
   const projectsDir = options.projectsDir ?? defaultProjectsDir();
   // Narrow to the buckets that could hold this directory's sessions. The slug mapping is the one
-  // documented in `transcripts.ts`: every `/` becomes `-`. It is lossy, so this can only ever be a
-  // pre-filter; the real `cwd` filter below is what decides. Skipping the rest of the corpus is
-  // what makes the ledger a two-second command instead of a one-minute one.
+  // documented in `transcripts.ts`. It is lossy, so this can only ever be a pre-filter; the real
+  // `cwd` filter below is what decides. Skipping the rest of the corpus is what makes the ledger a
+  // two-second command instead of a one-minute one.
   const files = await findTranscripts(
     projectsDir,
-    options.cwd === undefined ? undefined : options.cwd.replace(/\//g, '-'),
+    options.cwd === undefined ? undefined : projectSlugPrefix(options.cwd),
   );
   const sinceIso = options.since?.toISOString() ?? null;
 
