@@ -118,6 +118,18 @@ export interface SentRecord {
   systemPrompt: SentPart | null;
   /** The client's own tool schemas. `items` is how many tools. */
   builtinTools: SentPart | null;
+  /**
+   * The same schemas one tool at a time, by name. Empty when no snapshot was recorded.
+   *
+   * 🔑 What makes a built-in tool a lever. A `permissions.deny` rule naming one takes it out of the
+   * prompt, and one of these can be most of the client's own block on its own, so a single sum
+   * could never say which of them is worth the trade.
+   */
+  builtinToolChars: Record<string, number>;
+  /** Each agent in the listing by the type it is called with, sized as its line. */
+  agentChars: Record<string, number>;
+  /** The agent types the client marks as its own. They appear in no file. */
+  builtInAgents: string[];
 }
 
 export interface SessionEvidence {
@@ -166,6 +178,13 @@ export interface SessionEvidence {
    * too old to write attachments, and for a session with none.
    */
   record: SentRecord | null;
+  /**
+   * Calls to each of the client's own tools in this session.
+   *
+   * Per session rather than only per project, because the question a deny rule has to answer is
+   * "in how many sessions did you need this", and forty calls in one afternoon is one session.
+   */
+  builtinToolCalls: Record<string, number>;
 }
 
 export interface ProjectEvidence {

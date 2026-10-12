@@ -155,6 +155,15 @@ describe('scanEvidence', () => {
     expect(evidence.projects[0].builtinTools.Bash).toBe(1);
   });
 
+  it('keeps each session\u2019s own tool calls, so a tool can be counted in sessions and not only calls', async () => {
+    const evidence = await scanFixture({
+      a: [assistant([toolUse('Workflow'), toolUse('Workflow')], { cacheCreation: 100 })],
+      b: [assistant([toolUse('Bash')], { cacheCreation: 100 })],
+    });
+    const calls = evidence.sessions.map((one) => one.builtinToolCalls).sort((x, y) => Object.keys(x)[0].localeCompare(Object.keys(y)[0]));
+    expect(calls).toEqual([{ Bash: 1 }, { Workflow: 2 }]);
+  });
+
   it('🚨 takes the opening size from the first billed request, even when the cache served it', async () => {
     const evidence = await scanFixture({
       // The first call was a cache hit: another session had just sent the same prefix. The

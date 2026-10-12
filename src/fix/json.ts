@@ -73,6 +73,12 @@ function mutate(root: Shape, action: FileAction): boolean {
       plugins[action.plugin] = false;
       return true;
     }
+    case 'deny': {
+      const deny = arrayAt(objectAt(root, 'permissions'), 'deny');
+      if (deny.includes(action.rule)) return false;
+      deny.push(action.rule);
+      return true;
+    }
     case 'skill-override': {
       const overrides = objectAt(root, 'skillOverrides');
       if (overrides[action.skill] === action.value) return false;

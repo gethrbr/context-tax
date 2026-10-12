@@ -78,6 +78,9 @@ export async function resolvePlugins(
   for (const id of [...ids].sort()) {
     const toggle = settings.enabledPlugins.get(id);
     const chosen = installed === null ? null : pick(installations(installed[id]), cwd);
+    const hookFile =
+      chosen === null ? null : await readJsonObject(join(chosen.installPath, 'hooks', 'hooks.json'), problems);
+    const hooks = hookFile === null ? null : asRecord(hookFile.hooks);
     plugins.push({
       id,
       enabled: toggle?.enabled ?? false,
@@ -85,6 +88,7 @@ export async function resolvePlugins(
       installPath: chosen?.installPath ?? null,
       scope: chosen?.scope ?? null,
       installedAt: chosen?.installedAt ?? null,
+      hooks: hooks === null ? [] : Object.keys(hooks),
     });
   }
   return plugins;

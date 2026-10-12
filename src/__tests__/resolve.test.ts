@@ -383,6 +383,53 @@ describe('mcp servers', () => {
     expect(config.problems.some((problem) => problem.message.includes('no "mcpServers" key'))).toBe(true);
   });
 
+  /**
+   * 🚨 A plugin's server and a server you added yourself can share a name. The client loads both and
+   * lists the plugin's as `plugin:<plugin>:<name>`. Folding them into one row gave the plugin the
+   * other server's calls, which kept a plugin nobody used off the plan.
+   */
+  it('keeps a plugin server apart from a server of the same name, under the client\u2019s name for it', async () => {
+    const installPath = join(root, 'plugins', 'thing');
+    await write(join(installPath, '.mcp.json'), { mcpServers: { dup: { type: 'http', url: 'https://plugin.example/mcp' } } });
+    await write(join(home, '.claude', 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'thing@market': [{ scope: 'user', installPath, installedAt: '2026-01-02T00:00:00Z' }] },
+    });
+    await write(join(home, '.claude.json'), { mcpServers: { dup: { command: 'from-user' } } });
+
+    const { config } = await resolve();
+    expect(config.mcpServers.map((server) => [server.name, server.plugin])).toEqual([
+      ['dup', null],
+      ['plugin:thing:dup', 'thing@market'],
+    ]);
+    expect(config.problems.some((problem) => problem.message.includes('counted once'))).toBe(false);
+  });
+
+  it('renames every plugin copy of a clashing name, not only the first two', async () => {
+    const names = ['one', 'two', 'three'];
+    const plugins: Record<string, unknown[]> = {};
+    for (const name of names) {
+      const installPath = join(root, 'plugins', name);
+      await write(join(installPath, '.mcp.json'), { mcpServers: { dup: { command: name } } });
+      plugins[`${name}@market`] = [{ scope: 'user', installPath, installedAt: '2026-01-02T00:00:00Z' }];
+    }
+    await write(join(home, '.claude', 'plugins', 'installed_plugins.json'), { version: 2, plugins });
+    const { config } = await resolve();
+    // Once two plugins have clashed on `dup`, the bare name is free, and the third must not take it.
+    expect(config.mcpServers.map((server) => server.name)).toEqual(['plugin:one:dup', 'plugin:three:dup', 'plugin:two:dup']);
+  });
+
+  it('reads the events a plugin runs hooks on', async () => {
+    const installPath = join(root, 'plugins', 'thing');
+    await write(join(installPath, 'hooks', 'hooks.json'), { hooks: { SessionEnd: [], PreToolUse: [] } });
+    await write(join(home, '.claude', 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'thing@market': [{ scope: 'user', installPath, installedAt: '2026-01-02T00:00:00Z' }] },
+    });
+    const { config } = await resolve();
+    expect(config.plugins.find((plugin) => plugin.id === 'thing@market')?.hooks).toEqual(['SessionEnd', 'PreToolUse']);
+  });
+
   it('counts a name declared twice once, and says where the other one is', async () => {
     await write(join(repo, '.mcp.json'), { mcpServers: { dup: { command: 'from-project' } } });
     await write(join(home, '.claude.json'), { mcpServers: { dup: { command: 'from-user' } } });
@@ -514,6 +561,7 @@ describe('sessionsSince', () => {
       firstSeen,
       lastSeen: firstSeen,
       record: null,
+      builtinToolCalls: {},
     }) satisfies SessionEvidence;
 
   it('counts only sessions that started after the config did', () => {

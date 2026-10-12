@@ -28,7 +28,7 @@ const sources: ConfigSource[] = [
 ];
 
 const enabledBy = (path: string | null): ResolvedPlugin[] => [
-  { id: 'pack@market', enabled: true, enabledBy: path, installPath: null, scope: null, installedAt: null },
+  { id: 'pack@market', enabled: true, enabledBy: path, installPath: null, scope: null, installedAt: null, hooks: [] },
 ];
 
 describe('how far an MCP server reaches', () => {

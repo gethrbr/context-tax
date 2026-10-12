@@ -17,11 +17,13 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { unifiedDiff } from '../fix/diff.js';
-import { ApplyError, applyFixes, backupRoot, planFixes } from '../fix/index.js';
+import { ApplyError, applyFixes, backupRoot, fixLogPath, lastFixUnder, planFixes } from '../fix/index.js';
 import { detectIndent, editSettings, FixError } from '../fix/json.js';
 import { palette } from '../render/color.js';
-import { renderApplied, renderPlan } from '../render/fix.js';
-import type { FixAction, SettingsAction } from '../fix/types.js';
+import { actionsAt, asksForLevel, changeName, levelOffers, namesByWeight } from '../fix/levels.js';
+import type { LevelOffer } from '../fix/levels.js';
+import { renderApplied, renderLevels, renderPlan } from '../render/fix.js';
+import type { FixAction, FixPlan, SettingsAction } from '../fix/types.js';
 
 function action(overrides: Partial<SettingsAction> = {}): SettingsAction {
   return {
@@ -367,5 +369,227 @@ describe('what it says once it has written', () => {
     const screen = renderApplied([{ path: '/x/settings.json', backup: null, created: true }], plain, 80);
     expect(screen).not.toContain('copying the backup back');
     expect(screen).toContain('undoing this is deleting them');
+  });
+});
+
+/**
+ * A deny rule, the lever for Claude Code's own tools and its agents.
+ */
+describe('a deny rule', () => {
+  it('lands in permissions.deny beside what the file already allows', () => {
+    const before = '{\n  "permissions": {\n    "allow": [\n      "Bash(ls)"\n    ]\n  }\n}\n';
+    const { after, applied } = editSettings(before, [
+      { kind: 'deny', rule: 'Artifact' },
+      { kind: 'deny', rule: 'Agent(kit:reviewer)' },
+    ]);
+    expect(applied).toHaveLength(2);
+    expect(JSON.parse(after)).toEqual({ permissions: { allow: ['Bash(ls)'], deny: ['Artifact', 'Agent(kit:reviewer)'] } });
+  });
+
+  it('is already true when the rule is there, and the file does not move', () => {
+    const before = '{\n  "permissions": {\n    "deny": [\n      "Artifact"\n    ]\n  }\n}\n';
+    const result = editSettings(before, [{ kind: 'deny', rule: 'Artifact' }]);
+    expect(result.already).toHaveLength(1);
+    expect(result.after).toBe(before);
+  });
+
+  it('refuses a permissions block that is not an object rather than replacing it', () => {
+    expect(() => editSettings('{"permissions": []}', [{ kind: 'deny', rule: 'Artifact' }])).toThrow(FixError);
+  });
+
+  it('says on the plan which tool or agent stops working', () => {
+    const plain = palette(false);
+    const text = renderPlan(
+      {
+        edits: [
+          {
+            path: '/repo/.claude/settings.local.json',
+            before: null,
+            after: '{}\n',
+            actions: [
+              action({ kind: 'deny', rule: 'Workflow', saves: 2_000 } as Partial<SettingsAction>),
+              action({ kind: 'deny', rule: 'Agent(kit:reviewer)', saves: 100 } as Partial<SettingsAction>),
+            ],
+          },
+        ],
+        manual: [],
+        alreadyApplied: [],
+        saves: 2_100,
+        adds: 0,
+        problems: [],
+      },
+      plain,
+      100,
+    );
+    expect(text).toContain("switch off Claude Code's Workflow tool");
+    expect(text).toContain('switch off the kit:reviewer agent');
+  });
+});
+
+/**
+ * 🔑 The before-and-after line needs to know when `fix` last wrote here. A fix that only created
+ * files leaves no backup, so the log is the record and the backups are the fallback.
+ */
+describe('when fix last wrote here', () => {
+  async function machine(): Promise<{ home: string; settings: string }> {
+    const home = await mkdtemp(join(tmpdir(), 'context-tax-log-'));
+    const settings = join(home, 'repo', '.claude', 'settings.local.json');
+    await mkdir(join(home, 'repo', '.claude'), { recursive: true });
+    return { home, settings };
+  }
+
+  it('logs a fix that only created a file, and finds it again by the tree', async () => {
+    const { home, settings } = await machine();
+    const plan = await planFixes([action({ settingsPath: settings })]);
+    await applyFixes(plan, { home, stamp: 'stamp', now: '2026-10-12T08:00:00.000Z' });
+    expect(await lastFixUnder(join(home, 'repo'), home)).toBe('2026-10-12T08:00:00.000Z');
+    // Another tree has no fix, and a path that only starts with the same letters is another tree.
+    expect(await lastFixUnder(join(home, 'repo-two'), home)).toBeNull();
+    expect((await stat(fixLogPath(home))).mode & 0o777).toBe(0o600);
+  });
+
+  it('falls back to a backup directory written before the log existed', async () => {
+    const { home } = await machine();
+    const stamp = join(backupRoot(home), '2026-10-12T08-46-03-060Z');
+    await mkdir(stamp, { recursive: true });
+    await writeFile(join(stamp, `${join(home, 'repo').replace(/^\//, '').replace(/\//g, '-')}-.claude-settings.local.json`), '{}');
+    expect(await lastFixUnder(join(home, 'repo'), home)).toBe('2026-10-12T08:46:03.060Z');
+    // A backup of another repo's settings is that repo's fix, not this one's.
+    expect(await lastFixUnder(join(home, 'elsewhere'), home)).toBeNull();
+    // 🚨 And `rep` is not `repo`: flattening makes `/` and `-` the same character, so a bare prefix
+    // would hand this repo's fix to any sibling whose name starts the same way.
+    expect(await lastFixUnder(join(home, 'rep'), home)).toBeNull();
+    const sibling = join(backupRoot(home), '2026-10-13T08-00-00-000Z');
+    await mkdir(sibling, { recursive: true });
+    await writeFile(join(sibling, `${join(home, 'repo-two').replace(/^\//, '').replace(/\//g, '-')}-.claude-settings.local.json`), '{}');
+    expect(await lastFixUnder(join(home, 'repo'), home)).toBe('2026-10-12T08:46:03.060Z');
+  });
+
+  it('takes the newest, and skips a torn line in the log', async () => {
+    const { home } = await machine();
+    const repo = join(home, 'repo');
+    await mkdir(join(home, '.cache', 'context-tax'), { recursive: true });
+    await writeFile(
+      fixLogPath(home),
+      [
+        JSON.stringify({ at: '2026-10-01T00:00:00.000Z', files: [`${repo}/.claude/settings.local.json`] }),
+        '{"at": "2026-10-',
+        JSON.stringify({ at: '2026-10-09T00:00:00.000Z', files: [`${repo}/.claude/settings.local.json`] }),
+      ].join('\n'),
+    );
+    expect(await lastFixUnder(repo, home)).toBe('2026-10-09T00:00:00.000Z');
+  });
+});
+
+describe('how much to switch off', () => {
+  const action = (rule: string, saves: number): FixAction => ({
+    kind: 'deny',
+    rule,
+    settingsPath: '/p/.claude/settings.local.json',
+    why: 'w',
+    saves,
+  });
+  const ledger = {
+    actions: [action('Agent(kit:reviewer)', 300)],
+    levelActions: { lean: [action('Artifact', 13_000)], max: [action('ListAgents', 500)] },
+  };
+
+  /** 🚨 Each level carries the ones below it, and no level carries the ones above it. */
+  it('adds each level to the one before it, and never the one after', () => {
+    const rules = (level: 'safe' | 'lean' | 'max'): string[] => actionsAt(ledger, level).map(changeName);
+    expect(rules('safe')).toEqual(['kit:reviewer']);
+    expect(rules('lean')).toEqual(['kit:reviewer', 'Artifact']);
+    expect(rules('max')).toEqual(['kit:reviewer', 'Artifact', 'ListAgents']);
+  });
+
+  it('names the heaviest change first', () => {
+    expect(namesByWeight([action('Small', 500), action('Artifact', 13_000), action('Agent(kit:a)', 900)])).toEqual([
+      'Artifact',
+      'kit:a',
+      'Small',
+    ]);
+  });
+
+  const planOf = (actions: FixAction[]): FixPlan => ({
+    edits: [{ path: '/p/.claude/settings.local.json', before: '{}', after: '{}', actions: actions.filter((one) => one.kind !== 'manual') }],
+    manual: [],
+    alreadyApplied: [],
+    saves: actions.reduce((sum, one) => sum + (one.kind === 'manual' ? 0 : (one.saves ?? 0)), 0),
+    adds: 0,
+    problems: [],
+  });
+
+  it('offers each level by what it adds, and everything it recovers', () => {
+    const offers = levelOffers({
+      safe: planOf(actionsAt(ledger, 'safe')),
+      lean: planOf(actionsAt(ledger, 'lean')),
+      max: planOf(actionsAt(ledger, 'max')),
+    });
+    expect(offers).toEqual([
+      { level: 'safe', changes: 1, saves: 300, adds: ['kit:reviewer'] },
+      { level: 'lean', changes: 2, saves: 13_300, adds: ['Artifact'] },
+      { level: 'max', changes: 3, saves: 13_800, adds: ['ListAgents'] },
+    ]);
+  });
+
+  /** A change an earlier fix made is not in the plan, so it is not offered, and neither is its level. */
+  it('drops a stronger level with nothing left to write, and keeps safe as the default', () => {
+    const offers = levelOffers({ safe: planOf([]), lean: planOf([]), max: planOf([action('ListAgents', 500)]) });
+    expect(offers.map((one) => one.level)).toEqual(['safe', 'max']);
+    expect(offers[0]).toEqual({ level: 'safe', changes: 0, saves: 0, adds: [] });
+  });
+
+  /** 🚨 A question nobody can answer is a hang in CI, and one asked after --yes breaks a promise. */
+  it('asks only a terminal that has not already picked, and only between two levels or more', () => {
+    const quiet = { json: false, dryRun: false, yes: false };
+    expect(asksForLevel(quiet, true, 3)).toBe(true);
+    expect(asksForLevel(quiet, false, 3)).toBe(false);
+    expect(asksForLevel({ ...quiet, level: 'safe' }, true, 3)).toBe(false);
+    expect(asksForLevel({ ...quiet, yes: true }, true, 3)).toBe(false);
+    expect(asksForLevel({ ...quiet, dryRun: true }, true, 3)).toBe(false);
+    expect(asksForLevel({ ...quiet, json: true }, true, 3)).toBe(false);
+    expect(asksForLevel(quiet, true, 1)).toBe(false);
+  });
+
+  const offers: LevelOffer[] = [
+    { level: 'safe', changes: 1, saves: 300, adds: ['kit:reviewer'] },
+    { level: 'lean', changes: 2, saves: 13_300, adds: ['Artifact'] },
+    { level: 'max', changes: 3, saves: 13_800, adds: ['ListAgents'] },
+  ];
+
+  it('numbers the levels, mildest first, each with everything it would recover', () => {
+    const menu = renderLevels(offers, palette(false), { asFlags: false }, 80);
+    expect(menu).toMatch(/1 {2}safe +300 tokens {2}what you do not use/);
+    expect(menu).toMatch(/2 {2}lean +13,300 tokens {2}also what you use in under 1 session in 20/);
+    expect(menu).toMatch(/3 {2}max +13,800 tokens {2}also what you use in under 1 session in 5/);
+    expect(menu).toContain('+ Artifact');
+    expect(menu.indexOf('safe')).toBeLessThan(menu.indexOf('lean'));
+    for (const text of menu.split('\n')) expect(text.length).toBeLessThanOrEqual(80);
+  });
+
+  it('lists only the levels above the one that ran, as the flags that run them', () => {
+    const hint = renderLevels(offers, palette(false), { asFlags: true, above: 'lean' }, 80);
+    expect(hint).toContain('--level max');
+    expect(hint).not.toContain('--level lean');
+    expect(hint).not.toContain('safe');
+  });
+
+  it('keeps a long list of names to two lines and counts the rest', () => {
+    const many = Array.from({ length: 30 }, (_, index) => `agent-number-${index}`);
+    const menu = renderLevels([{ level: 'safe', changes: 30, saves: 6_000, adds: many }], palette(false), { asFlags: false }, 80);
+    const names = menu.split('\n').filter((text) => text.includes('agent-number'));
+    expect(names).toHaveLength(2);
+    expect(names[1]).toMatch(/and \d+ more$/);
+  });
+
+  it('says a level with nothing left to do has no change, not 0 tokens', () => {
+    const menu = renderLevels(
+      [{ level: 'safe', changes: 0, saves: 0, adds: [] }, offers[1]],
+      palette(false),
+      { asFlags: false },
+      80,
+    );
+    expect(menu).toContain('no change');
+    expect(menu).not.toContain(' 0 tokens');
   });
 });

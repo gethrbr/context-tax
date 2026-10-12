@@ -41,6 +41,8 @@ function ledgerFixture(): Ledger {
     listingBudget: null,
     neverReceived: null,
     actions: [],
+    levelActions: { lean: [], max: [] },
+    sinceFix: null,
     judged: true,
     machine: { sessions: 128, turns: 41_808, contextTokens: 8_912_004_331, clears: 172, compacts: 22 },
     reconciliation: {
@@ -244,6 +246,16 @@ describe('every screen fits the window it was given', () => {
     for (const width of WIDTHS) {
       expect(renderLedger(fixture, plain, width).split('\n').filter((line) => line.length > width)).toEqual([]);
     }
+  });
+
+  it('says what the last fix did in sessions, and waits for one before saying anything', () => {
+    const since = { day: '2026-10-12', before: 72_380, beforeSessions: 10, after: 51_204, afterSessions: 3 };
+    expect(renderLedger({ ...ledgerFixture(), sinceFix: since }, plain, 120)).toContain(
+      'Since context-tax fix on 2026-10-12: 72,380 tokens on the first request before, 51,204 after, 21,176 fewer',
+    );
+    expect(renderLedger({ ...ledgerFixture(), sinceFix: { ...since, after: null, afterSessions: 0 } }, plain, 120)).toContain(
+      'Start a session and run this again',
+    );
   });
 
   it('says the whole of a long error somewhere, even though no cell holds it', () => {

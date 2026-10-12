@@ -49,6 +49,13 @@ interface Candidate {
   plugin: string | null;
 }
 
+/** The name the client lists a plugin's server under, `plugin:<plugin>:<server>`. */
+function clientName(candidate: Candidate): Candidate {
+  return candidate.plugin === null
+    ? candidate
+    : { ...candidate, name: `plugin:${candidate.plugin.split('@')[0]}:${candidate.name}` };
+}
+
 /**
  * Pull `mcpServers` out of a file.
  *
@@ -253,8 +260,31 @@ export async function resolveMcpServers(
   }
 
   const chosen = new Map<string, Candidate>();
-  for (const candidate of candidates) {
-    const existing = chosen.get(candidate.name);
+  /** Names a plugin's server has clashed on. A later plugin with the same name is renamed too. */
+  const clashed = new Set<string>();
+  for (const declared of candidates) {
+    let candidate = declared;
+    let existing = chosen.get(candidate.name);
+    if (candidate.plugin !== null && clashed.has(candidate.name)) {
+      candidate = clientName(candidate);
+      existing = chosen.get(candidate.name);
+    }
+    // 🚨 A plugin's server is not a second declaration of a server with the same name. The client
+    // loads both, files the plugin's tools under `mcp__plugin_<plugin>_<name>__*` and lists it as
+    // `plugin:<plugin>:<name>`. Folding the two into one row handed the plugin the other server's
+    // calls, and a plugin that looks used is a plugin `fix` never offers to switch off: found on a
+    // real machine, a 164-skill plugin nobody had touched, hidden behind a separately added server
+    // of the same name with 165 calls. So on a clash, each plugin copy takes the client's name.
+    if (existing !== undefined && (candidate.plugin !== null || existing.plugin !== null)) {
+      clashed.add(candidate.name);
+      if (existing.plugin !== null) {
+        chosen.delete(existing.name);
+        const renamed = clientName(existing);
+        chosen.set(renamed.name, renamed);
+      }
+      candidate = clientName(candidate);
+      existing = chosen.get(candidate.name);
+    }
     if (existing === undefined) {
       chosen.set(candidate.name, candidate);
       continue;

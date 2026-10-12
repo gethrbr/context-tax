@@ -12,9 +12,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { Evidence, ProjectEvidence, SentRecord, SentSkill, SessionEvidence } from '../evidence/types.js';
 import { buildLedger } from '../ledger/index.js';
+import type { Ledger } from '../ledger/types.js';
 import { fractionToSendAll, pickRecord, readSentListing } from '../ledger/sent.js';
 import { toListedSkills } from '../measure/skill-listing.js';
 import type { MeasureResult, MeasuredMcpServer } from '../measure/types.js';
+import type { FixAction } from '../fix/types.js';
 import type { McpLaunchSpec, ResolveResult, ResolvedConfig, ResolvedMcpServer } from '../resolve/types.js';
 
 const ROOT = '/repo';
@@ -35,6 +37,7 @@ function session(overrides: Partial<SessionEvidence> = {}): SessionEvidence {
     firstSeen: '2026-06-01T00:00:00.000Z',
     lastSeen: '2026-06-01T01:00:00.000Z',
     record: null,
+    builtinToolCalls: {},
     ...overrides,
   };
 }
@@ -510,6 +513,7 @@ describe('the actions behind a finding', () => {
     installPath: '/plugins/x',
     scope: 'user',
     installedAt: '2026-01-01T00:00:00.000Z',
+    hooks: [] as string[],
   });
 
   it('turns a never-called project server into one settings edit', () => {
@@ -1130,7 +1134,7 @@ describe('a project with no history of its own', () => {
     const config = (path: string, kind: 'user' | 'project-shared'): Partial<ResolvedConfig> => ({
       sources: [{ kind, path, present: true, keys: [] }],
       plugins: [
-        { id: 'pack@market', enabled: true, enabledBy: path, installPath: null, scope: null, installedAt: null },
+        { id: 'pack@market', enabled: true, enabledBy: path, installPath: null, scope: null, installedAt: null, hooks: [] },
       ],
     });
     const history = evidence(elsewhere, [
@@ -1348,6 +1352,7 @@ describe('rows read from what a session sent', () => {
     installPath: '/plugins/x',
     scope: 'user',
     installedAt: '2026-01-01T00:00:00.000Z',
+    hooks: [] as string[],
   });
   const sent = (name: string, described: boolean, lineChars: number): SentSkill => ({
     name,
@@ -1367,6 +1372,9 @@ describe('rows read from what a session sent', () => {
     sessionDetails: null,
     systemPrompt: null,
     builtinTools: null,
+    builtinToolChars: {},
+    agentChars: {},
+    builtInAgents: [],
     ...overrides,
   });
   /** The newest of the twelve carries the record, the way the newest session on a machine does. */
@@ -1713,5 +1721,263 @@ describe('rows read from what a session sent', () => {
     const ledger = build(scripted, sessions);
     expect(ledger.source).toMatchObject({ kind: 'record', day: '2026-06-11' });
     expect(skillsRow(ledger)?.tokens).toBe(7_522);
+  });
+});
+
+/**
+ * What the client sends on its own account, as levers.
+ *
+ * 🔑 Every number in this block was a real measurement before it was a test: a `permissions.deny`
+ * rule took a tool out of the first request (one of them 11,402 tokens, in an interactive session),
+ * and two agents out of the listing. The guards are about the other direction, the rule this tool
+ * must never write: a deny for something you use.
+ */
+describe('levers in what the client sends', () => {
+  const sentRecord = (overrides: Partial<SentRecord> = {}): SentRecord => ({
+    client: '2.1.300',
+    asSent: true,
+    skillListing: null,
+    instructions: null,
+    agents: null,
+    toolList: null,
+    servers: {},
+    failedServers: [],
+    hooks: null,
+    sessionDetails: null,
+    systemPrompt: null,
+    builtinTools: { chars: 60_000, items: 3 },
+    builtinToolChars: { Bash: 4_000, Artifact: 52_000, Rarely: 4_000 },
+    agentChars: {},
+    builtInAgents: [],
+    ...overrides,
+  });
+  /** One session an hour, newest first, the order the real scan hands the ledger. */
+  const hour = (index: number): string => new Date(Date.UTC(2026, 6, 1) + (40 - index) * 3_600_000).toISOString();
+  /** Forty sessions that all carried the record. */
+  const forty = (record: SentRecord, calls: (index: number) => Record<string, number> = () => ({})) =>
+    Array.from({ length: 40 }, (_, index) =>
+      session({ sessionId: `t${index}`, firstSeen: hour(index), record, builtinToolCalls: calls(index) }),
+    );
+  const ledgerFor = (sessions: SessionEvidence[], config: Partial<ResolvedConfig> = {}, projects = [project()]) =>
+    buildLedger(resolveResult([], config), measureResult([]), evidence(sessions, projects));
+  const denies = (actions: FixAction[]): string[] =>
+    actions.flatMap((action) => (action.kind === 'deny' ? [action.rule] : []));
+  /** Every level's actions, the default plan's included. */
+  const everyLevel = (ledger: Ledger): FixAction[] => [...ledger.actions, ...ledger.levelActions.lean, ...ledger.levelActions.max];
+  /** Artifact used in `count` of forty sessions. */
+  const artifactIn = (count: number) =>
+    ledgerFor(forty(sentRecord(), (index): Record<string, number> => (index < count ? { Artifact: 1 } : {})));
+
+  it('denies a tool nobody has called, and counts what it sends as recoverable', () => {
+    const ledger = ledgerFor(forty(sentRecord(), () => ({ Rarely: 0 })));
+    expect(denies(ledger.actions)).toEqual(['Artifact', 'Rarely']);
+    const finding = ledger.findings.find((one) => one.headline.includes('never been used'));
+    expect(finding?.saves).toBe(13_000 + 1_000);
+  });
+
+  /** 🚨 The rule `fix` must not write: a tool used at all is never in the default plan. */
+  it('keeps a rarely used tool out of the default plan and at the lean level', () => {
+    const ledger = ledgerFor(forty(sentRecord(), (index): Record<string, number> => (index === 3 ? { Artifact: 9 } : {})));
+    expect(denies(ledger.actions)).toEqual(['Rarely']);
+    expect(denies(ledger.levelActions.lean)).toEqual(['Artifact']);
+    expect(ledger.levelActions.max).toEqual([]);
+    const finding = ledger.findings.find((one) => one.headline.includes('under 1 session in 20'));
+    // Not recoverable: only a level the person picks delivers it, and the headline must not promise it.
+    expect(finding?.saves).toBeNull();
+    expect(finding?.detail).toContain('Artifact 13,000, 1 of 40');
+    expect(finding?.fix).toContain('context-tax fix --level lean');
+  });
+
+  /** The lines are strict: 2 in 40 is 1 in 20 exactly, so it is past the lean line and under max. */
+  it('moves a tool from lean to max to nothing as its use crosses each line', () => {
+    expect(denies(artifactIn(1).levelActions.lean)).toEqual(['Artifact']);
+    expect(denies(artifactIn(2).levelActions.lean)).toEqual([]);
+    expect(denies(artifactIn(2).levelActions.max)).toEqual(['Artifact']);
+    expect(denies(artifactIn(7).levelActions.max)).toEqual(['Artifact']);
+    expect(denies(everyLevel(artifactIn(8)))).not.toContain('Artifact');
+  });
+
+  it('says a max-level tool at the max line, and points at the flag that writes it', () => {
+    const finding = artifactIn(4).findings.find((one) => one.headline.includes('under 1 session in 5'));
+    expect(finding?.saves).toBeNull();
+    expect(finding?.detail).toContain('Artifact 13,000, 4 of 40');
+    expect(finding?.fix).toContain('context-tax fix --level max');
+  });
+
+  it('never offers the tools a session cannot work without, however unused', () => {
+    const ledger = ledgerFor(forty(sentRecord({ builtinToolChars: { Bash: 40_000, Edit: 9_000, ToolSearch: 9_000 } })));
+    expect(denies(everyLevel(ledger))).toEqual([]);
+  });
+
+  it('does not offer a rarely used tool too small to be worth losing', () => {
+    const ledger = ledgerFor(
+      forty(sentRecord({ builtinToolChars: { Tiny: 1_600 } }), (index): Record<string, number> => (index === 0 ? { Tiny: 1 } : {})),
+    );
+    expect(everyLevel(ledger).filter((action) => action.kind === 'deny')).toEqual([]);
+  });
+
+  /**
+   * 🚨 The denominator is the sessions that carried the tool. A tool the client added last week, used
+   * in one of the six sessions since, is used in one in six; divided by the whole history it would
+   * be one in forty and offered as rare.
+   */
+  it('divides by the sessions that carried a tool, not by the whole history', () => {
+    const withTool = sentRecord();
+    const without = sentRecord({ builtinToolChars: { Bash: 4_000 } });
+    // The newest six carried it, and one of those six used it.
+    const sessions = Array.from({ length: 40 }, (_, index) =>
+      session({
+        sessionId: `n${index}`,
+        firstSeen: hour(index),
+        record: index < 6 ? withTool : without,
+        builtinToolCalls: index === 2 ? { Artifact: 1 } : {},
+      }),
+    );
+    const ledger = ledgerFor(sessions);
+    expect(denies(ledger.levelActions.lean)).not.toContain('Artifact');
+  });
+
+  it('says nothing about a tool too few sessions have carried', () => {
+    const ledger = ledgerFor(forty(sentRecord()).slice(0, 4));
+    expect(denies(ledger.actions)).toEqual([]);
+  });
+
+  it('counts a call from a session a script started as use', () => {
+    const sessions = forty(sentRecord()).map((one, index) =>
+      index === 5 ? { ...one, headless: true, record: null, builtinToolCalls: { Rarely: 2 } } : one,
+    );
+    expect(denies(ledgerFor(sessions).actions)).not.toContain('Rarely');
+  });
+
+  /** 🚨 A deny binds subagents too. A tool only a research agent calls is a tool in use. */
+  it('counts a call from a subagent as use', () => {
+    const sessions = [
+      ...forty(sentRecord()),
+      session({ sessionId: 'sub', kind: 'subagent', record: null, builtinToolCalls: { Rarely: 3 } }),
+    ];
+    expect(denies(ledgerFor(sessions).actions)).not.toContain('Rarely');
+  });
+
+  it('reads a record written before the per-tool fields existed without throwing', () => {
+    const old = { ...sentRecord() } as Partial<SentRecord>;
+    delete old.builtinToolChars;
+    delete old.agentChars;
+    delete old.builtInAgents;
+    const sessions = forty(old as SentRecord).map((one) => ({ ...one, builtinToolCalls: undefined as unknown as Record<string, number> }));
+    expect(() => ledgerFor(sessions)).not.toThrow();
+  });
+
+  it('denies an agent nobody has called, by the name the listing gives it', () => {
+    const record = sentRecord({
+      builtinToolChars: {},
+      agentChars: { 'kit:reviewer': 800, mine: 400, 'kit:busy': 800, Explore: 2_000 },
+      builtInAgents: ['Explore'],
+    });
+    const ledger = ledgerFor(forty(record), {}, [project({ agents: { busy: 3 } })]);
+    // The bare-name call counts for `kit:busy`, and the client's own agent is never offered.
+    expect(denies(ledger.actions)).toEqual(['Agent(kit:reviewer)', 'Agent(mine)']);
+    expect(ledger.findings.find((one) => one.headline.includes('agents have never been called'))?.saves).toBe(300);
+  });
+
+  it('leaves an idle plugin’s agents to the plugin switch', () => {
+    const record = sentRecord({ builtinToolChars: {}, agentChars: { 'kit:reviewer': 800 } });
+    const ledger = ledgerFor(forty(record), {
+      agents: [
+        { name: 'reviewer', description: 'd', scope: 'plugin', path: '/x', plugin: 'kit@market', tools: null, listingChars: 20, shadowedBy: null },
+      ],
+      plugins: [{ id: 'kit@market', enabled: true, enabledBy: null, installPath: null, scope: 'user', installedAt: null, hooks: [] }],
+    });
+    expect(denies(ledger.actions)).toEqual([]);
+  });
+
+  const skillIn = (name: string, plugin: string, lineChars: number) => ({
+    name,
+    description: 'd'.repeat(lineChars),
+    whenToUse: null,
+    modelInvocable: true,
+    scope: 'plugin' as const,
+    path: '/x',
+    plugin,
+    listingChars: name.length + 2 + lineChars,
+    shadowedBy: null,
+    override: null,
+  });
+
+  /**
+   * 🚨 Found on a real machine: a 164-skill plugin with one skill call in 300 sessions, never offered,
+   * because one call is "in use". At the lean level it is offered whole, with what else stops with it.
+   */
+  it('offers a plugin used once in many sessions at the lean level, naming its hooks', () => {
+    const skills = Array.from({ length: 6 }, (_, index) => skillIn(`s${index}`, 'kit@market', 600));
+    const ledger = ledgerFor(forty(sentRecord({ builtinToolChars: {} })), {
+      skills,
+      plugins: [
+        { id: 'kit@market', enabled: true, enabledBy: null, installPath: null, scope: 'user', installedAt: null, hooks: ['SessionEnd'] },
+      ],
+    }, [project({ skills: { s0: { model: 1, user: 0 } } })]);
+    expect(ledger.actions.some((action) => action.kind === 'disable-plugin')).toBe(false);
+    expect(ledger.levelActions.lean).toEqual([
+      expect.objectContaining({ kind: 'disable-plugin', plugin: 'kit@market', why: expect.stringContaining('SessionEnd') }),
+    ]);
+  });
+
+  it('moves a plugin used in 1 session in 20 to the max level', () => {
+    const skills = Array.from({ length: 6 }, (_, index) => skillIn(`s${index}`, 'kit@market', 600));
+    const ledger = ledgerFor(forty(sentRecord({ builtinToolChars: {} })), {
+      skills,
+      plugins: [{ id: 'kit@market', enabled: true, enabledBy: null, installPath: null, scope: 'user', installedAt: null, hooks: [] }],
+    }, [project({ skills: { s0: { model: 2, user: 0 } } })]);
+    expect(ledger.levelActions.lean).toEqual([]);
+    expect(ledger.levelActions.max).toEqual([expect.objectContaining({ kind: 'disable-plugin', plugin: 'kit@market' })]);
+    expect(ledger.findings.find((one) => one.headline.includes('plugin'))?.fix).toContain('--level max');
+  });
+
+  it('leaves a plugin alone once it is used in 1 session in 5', () => {
+    const skills = Array.from({ length: 6 }, (_, index) => skillIn(`s${index}`, 'kit@market', 600));
+    const ledger = ledgerFor(forty(sentRecord({ builtinToolChars: {} })), {
+      skills,
+      plugins: [{ id: 'kit@market', enabled: true, enabledBy: null, installPath: null, scope: 'user', installedAt: null, hooks: [] }],
+    }, [project({ skills: { s0: { model: 8, user: 0 } } })]);
+    expect(everyLevel(ledger).filter((action) => action.kind === 'disable-plugin')).toEqual([]);
+  });
+
+  it('names an idle plugin’s hooks on the plain switch too', () => {
+    const ledger = ledgerFor(forty(sentRecord({ builtinToolChars: {} })), {
+      skills: [skillIn('quiet', 'kit@market', 900)],
+      plugins: [
+        { id: 'kit@market', enabled: true, enabledBy: null, installPath: null, scope: 'user', installedAt: null, hooks: ['PreToolUse', 'SessionEnd'] },
+      ],
+    });
+    expect(ledger.actions).toContainEqual(
+      expect.objectContaining({ kind: 'disable-plugin', why: expect.stringContaining('hooks on PreToolUse and SessionEnd') }),
+    );
+  });
+});
+
+describe('what the last fix did', () => {
+  const at = (day: number, tokens: number) =>
+    session({ sessionId: `d${day}`, firstSeen: `2026-08-${String(day).padStart(2, '0')}T09:00:00.000Z`, coldStartTokens: tokens });
+  const sessions = [at(14, 40_000), at(13, 42_000), at(12, 70_000), at(11, 72_000), at(10, 71_000)];
+  const build = (lastFix: string | null, list = sessions) =>
+    buildLedger(resolveResult([]), measureResult([]), evidence(list, [project()]), { lastFix });
+
+  it('takes the exact median on each side of the fix', () => {
+    expect(build('2026-08-13T00:00:00.000Z').sinceFix).toEqual({
+      day: '2026-08-13',
+      before: 71_000,
+      beforeSessions: 3,
+      after: 41_000,
+      afterSessions: 2,
+    });
+  });
+
+  /** 🚨 A settings file changes the next session. An empty side printed as zero reads as a saving. */
+  it('waits for a session that started after the fix', () => {
+    expect(build('2026-08-20T00:00:00.000Z').sinceFix).toMatchObject({ after: null, afterSessions: 0 });
+  });
+
+  it('says nothing when there was no fix, or nothing before it', () => {
+    expect(build(null).sinceFix).toBeNull();
+    expect(build('2026-08-01T00:00:00.000Z').sinceFix).toBeNull();
   });
 });

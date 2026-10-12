@@ -14,7 +14,7 @@
  *     a truncated settings file is a broken session, not a lost edit.
  */
 
-import { chmod, copyFile, mkdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, copyFile, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -35,6 +35,52 @@ const FILE_MODE = 0o600;
 
 export function backupRoot(home = homedir()): string {
   return join(home, '.cache', 'context-tax', 'backups');
+}
+
+/** One line per `fix` that wrote something: when, and which files. */
+export function fixLogPath(home = homedir()): string {
+  return join(home, '.cache', 'context-tax', 'fixes.jsonl');
+}
+
+/** `2026-10-12T08-46-03-060Z`, a backup directory's name, back to the time it stands for. */
+function stampTime(stamp: string): string | null {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(stamp);
+  return match === null ? null : `${match[1]}:${match[2]}:${match[3]}.${match[4]}Z`;
+}
+
+/**
+ * When `fix` last wrote a settings file under `root`, as an ISO time, or `null`.
+ *
+ * The log is the record. A backup directory is the fallback, for a fix made before the log existed:
+ * its name is the time, and each file in it is named after the path it came from. A fix that only
+ * created files left no backup, which is why the log is not optional.
+ */
+export async function lastFixUnder(root: string, home = homedir()): Promise<string | null> {
+  const times: string[] = [];
+  const under = (path: string): boolean => path === root || path.startsWith(`${root}/`);
+  const log = await readFile(fixLogPath(home), 'utf8').catch(() => '');
+  for (const line of log.split('\n')) {
+    if (line.trim() === '') continue;
+    try {
+      const entry = JSON.parse(line) as { at?: unknown; files?: unknown };
+      if (typeof entry.at !== 'string' || !Array.isArray(entry.files)) continue;
+      if (entry.files.some((file) => typeof file === 'string' && under(file))) times.push(entry.at);
+    } catch {
+      // One torn line is a log written while the machine went down. The rest of it still holds.
+      continue;
+    }
+  }
+  // 🚨 `-.claude-` and not just `-`: flattening turns `/` and `-` alike into `-`, so `~/app` would
+  // otherwise claim the backups of `~/app-two`. Every settings file `fix` writes under a tree is in
+  // its `.claude/` directory.
+  const prefix = `${flatten(root)}-.claude-`;
+  for (const stamp of await readdir(backupRoot(home)).catch(() => [] as string[])) {
+    const at = stampTime(stamp);
+    if (at === null) continue;
+    const files = await readdir(join(backupRoot(home), stamp)).catch(() => [] as string[]);
+    if (files.some((file) => file.startsWith(prefix))) times.push(at);
+  }
+  return times.length === 0 ? null : times.sort().at(-1) ?? null;
 }
 
 /** `/Users/x/.claude/settings.local.json` -> `Users-x-.claude-settings.local.json`. */
@@ -124,6 +170,8 @@ export interface ApplyOptions {
   home?: string;
   /** A stable stamp for the backup directory name. Injectable so tests are deterministic. */
   stamp?: string;
+  /** The time written to the fix log. Injectable for the same reason. */
+  now?: string;
 }
 
 /**
@@ -186,6 +234,18 @@ export async function applyFixes(plan: FixPlan, options: ApplyOptions = {}): Pro
       throw new ApplyError(`could not write ${edit.path}: ${fsFault(error)}`, edit.path, applied);
     }
     applied.push({ path: edit.path, backup, created: edit.before === null });
+  }
+
+  if (applied.length > 0) {
+    const entry = { at: options.now ?? new Date().toISOString(), files: applied.map((file) => file.path) };
+    try {
+      await mkdir(dirname(fixLogPath(home)), { recursive: true, mode: DIR_MODE });
+      await appendFile(fixLogPath(home), `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: FILE_MODE });
+    } catch {
+      // ⚠️ Deliberately not an error. Every settings file above is written and backed up, and the
+      // log feeds one line of the report, the before-and-after. Failing the fix over it would tell
+      // the reader their settings were not changed when they were.
+    }
   }
 
   return applied;

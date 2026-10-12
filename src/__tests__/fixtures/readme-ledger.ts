@@ -44,6 +44,8 @@ export function readmeLedger(): Ledger {
     listingBudget: { fraction: 0.015, addsTokens: 910, atLeast: false, settingsPath: SETTINGS },
     neverReceived: { dropped: 9, listed: 31 },
     actions: [],
+    levelActions: { lean: [], max: [] },
+    sinceFix: null,
     judged: true,
     machine: {
       sessions: SESSIONS,
@@ -262,7 +264,13 @@ export function readmeLedger(): Ledger {
         calls: null,
         perCall: null,
         basis: null,
-        verdict: { kind: 'not-attributable' as const, why: itsOwn },
+        verdict: {
+          kind: 'not-attributable' as const,
+          why:
+            part === 'tools'
+              ? 'sent by Claude Code itself on every turn. A permissions.deny rule takes one out of what is sent'
+              : itsOwn,
+        },
         fix: null,
       })),
     ],
@@ -336,6 +344,17 @@ export function readmeLedger(): Ledger {
           'The listing is over its budget, so most of what this frees goes to another description rather than out of the prompt. changelog-writer, commit-helper, db-migrate, ...',
         saves: null,
         fix: 'set each to off in skillOverrides, or delete the ones you do not recognise',
+        actions: [],
+      },
+      {
+        headline: "2 of Claude Code's own tools are 4,300 tokens and used in under 1 session in 20",
+        detail:
+          `Workflow 2,300, 2 of ${SESSIONS} (multi-agent workflows); ScheduleWakeup 2,000, 1 of ${SESSIONS} ` +
+          '(/loop without an interval)',
+        saves: null,
+        fix:
+          'context-tax fix --level lean denies them, for 4,300 fewer tokens on every turn. Each stops working until ' +
+          'you take its rule out of permissions.deny',
         actions: [],
       },
     ],

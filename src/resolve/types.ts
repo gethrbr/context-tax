@@ -209,6 +209,13 @@ export interface ResolvedPlugin {
   scope: string | null;
   /** ISO date this machine installed it. The plugin's own git history is a different question. */
   installedAt: string | null;
+  /**
+   * The events its `hooks/hooks.json` runs a hook on, such as `SessionEnd`.
+   *
+   * 🔑 A hook is use that no transcript records as a call, so it cannot rule the plugin in or out.
+   * It is carried so that switching the plugin off can say what else stops with it.
+   */
+  hooks: string[];
 }
 
 /** Something we could not read or understand. Collected, never thrown. */

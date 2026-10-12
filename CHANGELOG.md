@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0
+
+### Added
+
+- **Claude Code's own tools are a lever.** A `permissions.deny` rule naming a tool takes it out of
+  what is sent, and the report used to call the whole block "nothing here to switch off". Each tool
+  is now priced from the session's own record and counted in sessions: never used, `fix` denies it;
+  used now and then and worth at least 500 tokens, it is denied at the level you pick, and every
+  line says what stops working. Measured before it was written, in an interactive session: one tool,
+  11,402 tokens of a 47,700-token first request.
+- **Agents that are never called are denied with `Agent(<name>)`.** The agent listing has no cap,
+  unlike the skill listing, so an agent taken out is that many tokens gone. The client's own agents
+  are never offered, and an idle plugin's agents leave with the plugin.
+- **`fix` asks how much to switch off.** In a terminal it shows three levels, each with the tokens
+  it recovers and what it adds by name, and asks: `safe` (the default) is what you do not use, `lean`
+  adds Claude Code's own tools and the plugins you use in under 1 session in 20, `max` the ones under
+  1 in 5. `--level` picks one without asking; a run that cannot ask gets `safe`.
+- **A plugin used rarely is offered at the `lean` or `max` level.** One call in 300 sessions kept a 164-skill
+  plugin off the plan for good. It is now priced as everything it sends, and the line names the
+  hooks that stop with it, because a hook is use no transcript records.
+- **The report says what the last `fix` did.** Its first lines give the exact first-request median
+  before and after it, once a session has started since. `fix` logs what it writes to
+  `~/.cache/context-tax/fixes.jsonl`; a fix made before the log is found from its backup.
+- `--level <safe|lean|max>`.
+
+### Fixed
+
+- 🚨 **A plugin's MCP server is kept apart from a server you declared with the same name.** The
+  client loads both and lists the plugin's as `plugin:<plugin>:<name>`. They were folded into one row,
+  which gave the plugin the other server's calls and kept it off the plan as "in use".
+
 ## 0.4.2
 
 ### Fixed

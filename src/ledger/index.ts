@@ -18,6 +18,7 @@
 import { transcriptKeysFor } from '../evidence/names.js';
 import type { Evidence, ProjectEvidence, SentServer, SessionEvidence } from '../evidence/types.js';
 import { actionKey } from '../fix/types.js';
+import { LEVEL_LINES, levelFor } from '../fix/levels.js';
 import type { FixAction } from '../fix/types.js';
 import {
   apportion,
@@ -48,6 +49,8 @@ import type {
   LedgerRow,
   ListingBudgetOffer,
   MachineEvidence,
+  SinceFix,
+  StrongerLevel,
   Verdict,
 } from './types.js';
 
@@ -66,6 +69,13 @@ export interface LedgerOptions {
    * and reporting it as such is precisely how a tool loses the reader.
    */
   minSessions?: number;
+  /**
+   * When `fix` last wrote a settings file under this tree, as an ISO time. `null` when it never has.
+   *
+   * Read from disk by the caller, so the ledger stays a function of what it is given. It splits the
+   * history in two, and the two medians are the only proof a fix did anything that is not a model.
+   */
+  lastFix?: string | null;
 }
 
 const DEFAULT_WINDOW = 10;
@@ -83,6 +93,37 @@ const RARELY_CALLED = 0.1;
 
 /** Below this, a server this tool cannot edit is not worth a row of its own. */
 const SMALL_SERVER = 100;
+
+/**
+ * Below this a rarely used tool or plugin is not offered at all. Losing something you do use, now
+ * and then, is a real cost, and a few hundred tokens of a first request does not pay for it.
+ */
+const RARE_FLOOR = 500;
+
+/**
+ * Tools a session cannot work without, and the ones that reach everything else. Never offered,
+ * however the numbers fall: a machine where `Edit` looks rare is a machine whose history is odd.
+ */
+const NEVER_DENIED = new Set(['Bash', 'Read', 'Edit', 'Write', 'ToolSearch', 'Skill', 'Agent']);
+
+/** What stops working when one of these is denied, where the tool's name does not already say. */
+const TOOL_JOBS: Record<string, string> = {
+  Artifact: 'publishing pages to claude.ai',
+  AskUserQuestion: 'multiple-choice questions to you',
+  CronCreate: 'scheduled prompts',
+  EnterPlanMode: 'plan mode',
+  ListAgents: 'finding other sessions to message',
+  Monitor: 'waiting on a background command',
+  NotebookEdit: 'editing notebooks',
+  ReportFindings: 'the /code-review report',
+  ScheduleWakeup: '/loop without an interval',
+  SendFeedback: 'feedback drafts to Anthropic',
+  SendMessage: 'messaging other sessions',
+  TodoWrite: 'the task list',
+  WebFetch: 'reading a web page',
+  WebSearch: 'web search',
+  Workflow: 'multi-agent workflows',
+};
 
 /**
  * `1 memory files` was on the screen of every run in a directory with one CLAUDE.md.
@@ -236,6 +277,7 @@ function serverActions(
   saves: number | null,
   why: string,
   idle: (plugin: string) => boolean,
+  note: (plugin: string) => string,
 ): FixAction[] {
   switch (server.fixLever.kind) {
     case 'disabledMcpjsonServers':
@@ -266,7 +308,7 @@ function serverActions(
           },
         ];
       }
-      return [{ kind: 'disable-plugin', plugin, settingsPath, why, saves }];
+      return [{ kind: 'disable-plugin', plugin, settingsPath, why: `${why}${note(plugin)}`, saves }];
     }
     case 'none':
       return [];
@@ -465,6 +507,10 @@ export function buildLedger(
     .filter((session) => session.kind === 'session')
     .sort((a, b) => (b.firstSeen ?? '').localeCompare(a.firstSeen ?? ''));
   const sessions = allSessions.filter((session) => under(session.cwd, root));
+  /** The machine's sessions a person started: what carried a tool, an agent or a plugin. */
+  const people = allSessions.some((one) => !one.headless) ? allSessions.filter((one) => !one.headless) : allSessions;
+  /** Deny rules and plugin switches for things you have used. Written only at the level picked. */
+  const levelActions: Record<StrongerLevel, FixAction[]> = { lean: [], max: [] };
 
   // A session a script started is billed like any other and is counted in every denominator, but
   // it is often run under settings nobody works with, so it does not get to say what a turn costs
@@ -571,28 +617,45 @@ export function buildLedger(
    * unused would take four working things with it. Every surface the plugin contributes is checked,
    * and a single call anywhere is enough to rule the lever out.
    */
-  const pluginIsIdle = (id: string): boolean => {
+  const pluginUses = (id: string): number => {
     // 🚨 Machine-wide on purpose, and stricter than every other denominator here. This guards the
     // only lever that takes four things away at once, so a single call anywhere on the machine has
     // to be enough to rule it out. Scoping it to this tree would switch off a plugin that is
     // working in another repo, and the tool would report success while doing it.
-    const usedServer = config.mcpServers.some(
-      (server) => server.plugin === id && serverCalls(everywhere.calls, server.name, id) > 0,
-    );
-    const usedSkill = config.skills.some(
-      (skill) =>
-        skill.plugin === id &&
-        callsFor(everywhere.skillModelCalls, skill.name, id) +
-          callsFor(everywhere.skillTypedCalls, skill.name, id) >
-          0,
-    );
-    const usedAgent = config.agents.some(
-      (agent) => agent.plugin === id && callsFor(everywhere.agentCalls, agent.name, id) > 0,
-    );
-    const usedCommand = config.commands.some(
-      (command) => command.plugin === id && callsFor(everywhere.skillTypedCalls, command.name, id) > 0,
-    );
-    return !usedServer && !usedSkill && !usedAgent && !usedCommand;
+    const servers = config.mcpServers
+      .filter((server) => server.plugin === id)
+      .reduce((sum, server) => sum + serverCalls(everywhere.calls, server.name, id), 0);
+    const skills = config.skills
+      .filter((skill) => skill.plugin === id)
+      .reduce(
+        (sum, skill) =>
+          sum + callsFor(everywhere.skillModelCalls, skill.name, id) + callsFor(everywhere.skillTypedCalls, skill.name, id),
+        0,
+      );
+    const agents = config.agents
+      .filter((agent) => agent.plugin === id)
+      .reduce((sum, agent) => sum + callsFor(everywhere.agentCalls, agent.name, id), 0);
+    const commands = config.commands
+      .filter((command) => command.plugin === id)
+      .reduce((sum, command) => sum + callsFor(everywhere.skillTypedCalls, command.name, id), 0);
+    return servers + skills + agents + commands;
+  };
+  const pluginIsIdle = (id: string): boolean => pluginUses(id) === 0;
+
+  /**
+   * Calls to an agent by the type the listing names it with. `plugin:name` is called by either
+   * form, the way a plugin skill is, and a bare-name call is credited to every plugin that ships
+   * the name: over-counting use can only make this leave an agent alone.
+   */
+  const agentUses = (type: string): number => {
+    const cut = type.indexOf(':');
+    return (everywhere.agentCalls.get(type) ?? 0) + (cut === -1 ? 0 : (everywhere.agentCalls.get(type.slice(cut + 1)) ?? 0));
+  };
+
+  /** What else stops with a plugin. Its hooks run on events, not calls, so no count rules them out. */
+  const pluginNote = (id: string): string => {
+    const hooks = config.plugins.find((plugin) => plugin.id === id)?.hooks ?? [];
+    return hooks.length === 0 ? '' : ` Its hooks on ${hooks.join(' and ')} stop with it.`;
   };
 
   const share = (tokens: number | null): number | null =>
@@ -739,6 +802,7 @@ export function buildLedger(
             `${verdict.calls} call${verdict.calls === 1 ? '' : 's'} in ${verdict.sessions} ` +
             `sessions${where(verdict.scope)}.`,
           pluginIsIdle,
+          pluginNote,
         ),
       });
     }
@@ -758,6 +822,7 @@ export function buildLedger(
             `has never been called in ${verdict.sessions} sessions${where(verdict.scope)} ` +
             `${verdict.window}.`,
           pluginIsIdle,
+          pluginNote,
         ),
       });
     }
@@ -936,7 +1001,9 @@ export function buildLedger(
           // in `resolve/mcp.ts`: the evidence is repo-scoped, so the edit has to be. Project scope
           // works — this repo's own `.claude/settings.json` already carries an `enabledPlugins` block.
           settingsPath: config.settingsTarget,
-          why: `nothing the ${skill.plugin} plugin provides has been used anywhere on this machine`,
+          why:
+            `nothing the ${skill.plugin} plugin provides has been used anywhere on this machine.` +
+            pluginNote(skill.plugin),
           saves,
         });
         continue;
@@ -1240,6 +1307,82 @@ export function buildLedger(
     });
   }
 
+  /**
+   * 🔑 A plugin used once is not a plugin you use, it is a plugin you tried.
+   *
+   * The whole-plugin lever stays off the default plan the moment anything it provides has a call,
+   * which is right for `fix` and wrong as the last word. Found on a real machine: a 164-skill plugin
+   * with one skill call, from one subagent, in the 300 sessions since it was installed, costing
+   * about 4,000 tokens on every first request. Under a level's line it is offered at that level,
+   * priced as everything it sends: its skills' share of the listing, its servers, its agents. Calls
+   * stand in for sessions, which over-counts use, the direction that leaves a plugin alone.
+   */
+  const usedPlugins: { id: string; uses: number; over: number; tokens: number; level: StrongerLevel }[] = [];
+  for (const plugin of config.plugins) {
+    if (!plugin.enabled || pluginIsIdle(plugin.id)) continue;
+    const uses = pluginUses(plugin.id);
+    const since = plugin.installedAt === null ? Number.NaN : Date.parse(plugin.installedAt);
+    const over = Number.isNaN(since)
+      ? people.length
+      : people.filter((one) => Date.parse(one.firstSeen ?? '') >= since).length;
+    if (over < minSessions) continue;
+    const line = levelFor(uses, over);
+    if (line === null) continue;
+    const name = plugin.id.split('@')[0];
+    const keys = new Set(
+      config.skills.filter((skill) => skill.plugin === plugin.id && skill.shadowedBy === null).map(skillKey),
+    );
+    const listing = toTokens(savedBy(listingPopulation, listingBudget, keys));
+    const servers = config.mcpServers
+      .filter((server) => server.plugin === plugin.id)
+      .flatMap((server) => transcriptKeysFor(server.name, server.plugin))
+      .reduce((sum, key) => {
+        const sent = record?.servers[key];
+        return sum + (sent === undefined ? 0 : toTokens(sent.nameChars + sent.instructionChars + sent.schemaChars));
+      }, 0);
+    // Only its agents that have been called: one never called is denied by the default plan, and
+    // counting it here too would promise its tokens twice.
+    const agents = toTokens(
+      Object.entries(record?.agentChars ?? {})
+        .filter(([type]) => type.startsWith(`${name}:`) && agentUses(type) > 0)
+        .reduce((sum, [, chars]) => sum + chars, 0),
+    );
+    const tokens = listing + servers + agents;
+    if (tokens >= RARE_FLOOR) usedPlugins.push({ id: plugin.id, uses, over, tokens, level: line.level });
+  }
+  for (const line of LEVEL_LINES) {
+    const sorted = usedPlugins.filter((one) => one.level === line.level).sort((a, b) => b.tokens - a.tokens);
+    if (sorted.length === 0) continue;
+    const tokens = sorted.reduce((sum, one) => sum + one.tokens, 0);
+    // The marketplace only where two of them ship a plugin of the same name, as with skills.
+    const short = (id: string): string =>
+      usedPlugins.filter((other) => other.id.split('@')[0] === id.split('@')[0]).length > 1 ? id : id.split('@')[0];
+    for (const one of sorted) {
+      levelActions[line.level].push({
+        kind: 'disable-plugin',
+        plugin: one.id,
+        settingsPath: config.settingsTarget,
+        why:
+          `everything the ${one.id} plugin sends is about ${one.tokens.toLocaleString('en-US')} tokens of every turn, ` +
+          `and it has been used ${one.uses === 1 ? 'once' : `${one.uses} times`} in the ${plural(one.over, 'session')} ` +
+          `on this machine since it was installed.${pluginNote(one.id)}`,
+        saves: one.tokens,
+      });
+    }
+    findings.push({
+      headline:
+        `${plural(sorted.length, 'plugin')} ${sorted.length === 1 ? 'is' : 'are'} ${tokens.toLocaleString('en-US')} tokens ` +
+        `and used in ${line.words}`,
+      detail: sorted
+        .map((one) => `${short(one.id)} ${one.tokens.toLocaleString('en-US')}, ${one.uses === 1 ? '1 use' : `${one.uses} uses`} in ${one.over} sessions`)
+        .join('; '),
+      // Not recoverable, for the reason the rare tools are not: only a level you pick writes it.
+      saves: null,
+      fix: `context-tax fix --level ${line.level} switches each off in enabledPlugins, skills, servers, agents and hooks together`,
+      actions: [],
+    });
+  }
+
   const visibleAgents = config.agents.filter((agent) => agent.shadowedBy === null);
   // The record counts the agents the client ships with as well, which appear in no file.
   const agentTokens = record?.agents == null ? measure.agents.tokens : toTokens(record.agents.chars);
@@ -1257,6 +1400,140 @@ export function buildLedger(
     verdict: { kind: 'not-attributable', why: 'agent listings are not separable from the prompt' },
     fix: null,
   });
+
+  /**
+   * 🔑 Claude Code's own tools and the agents in its listing, priced one at a time.
+   *
+   * The client's tools were the largest block on the screen and the only one labelled "nothing to
+   * switch off", which was wrong. A `permissions.deny` rule naming a tool, or `Agent(<name>)`, takes
+   * it out of what is sent. Proved by running the client both ways before a line of this existed:
+   * one tool denied, 1,695 tokens fewer on the first request; two agents denied, 623 fewer.
+   *
+   * Agents are the honest half of what `fix` used to promise for skills. The skill listing is capped,
+   * so switching a skill off hands its room to another description; the agent listing has no cap,
+   * so an agent taken out of it is that many tokens gone.
+   *
+   * Judged over the whole machine, like a plugin, because a rule here that takes away a tool another
+   * repo uses is the same mistake at a smaller size. A session a person started says what carried
+   * the tool; a call from any session at all, a script's included, counts as use.
+   */
+  if (record !== null) {
+    const unusedTools: { tool: string; tokens: number; over: number }[] = [];
+    const usedTools: { tool: string; tokens: number; used: number; over: number; level: StrongerLevel }[] = [];
+    for (const [tool, chars] of Object.entries(record.builtinToolChars ?? {})) {
+      if (NEVER_DENIED.has(tool)) continue;
+      // Over the sessions that carried it: a tool the client added last month has not been
+      // ignorable for the sessions before that, and dividing by them would call it rare.
+      const carried = people.filter((one) => one.record?.builtinToolChars?.[tool] !== undefined).length;
+      // 🚨 Every transcript, a subagent's included. A deny rule binds subagents too, so a tool only
+      // a research agent calls is a tool in use, and a count of main sessions alone calls it unused.
+      const used = evidence.sessions.filter((one) => (one.builtinToolCalls?.[tool] ?? 0) > 0).length;
+      const over = Math.max(carried, used);
+      if (over < minSessions) continue;
+      if (used === 0) {
+        unusedTools.push({ tool, tokens: toTokens(chars), over });
+        continue;
+      }
+      const line = levelFor(used, over);
+      if (line !== null && toTokens(chars) >= RARE_FLOOR) {
+        usedTools.push({ tool, tokens: toTokens(chars), used, over, level: line.level });
+      }
+    }
+    const byWeight = <T extends { tokens: number }>(list: T[]): T[] => [...list].sort((a, b) => b.tokens - a.tokens);
+    const job = (tool: string): string => TOOL_JOBS[tool] ?? `the ${tool} tool`;
+    const denyTool = (tool: string, tokens: number, use: string): FixAction => ({
+      kind: 'deny',
+      rule: tool,
+      settingsPath: config.settingsTarget,
+      why:
+        `${tool} is ${tokens.toLocaleString('en-US')} tokens of every turn and ${use}. ` +
+        `Denied, ${job(tool)} stops working until the rule is taken out.`,
+      saves: tokens,
+    });
+
+    if (unusedTools.length > 0) {
+      const sorted = byWeight(unusedTools);
+      const tokens = sorted.reduce((sum, one) => sum + one.tokens, 0);
+      findings.push({
+        headline:
+          `${sorted.length} of Claude Code's own tools ${sorted.length === 1 ? 'has' : 'have'} never been used: ` +
+          `${tokens.toLocaleString('en-US')} tokens`,
+        detail:
+          `${sorted.map((one) => `${one.tool} ${one.tokens.toLocaleString('en-US')} (${job(one.tool)})`).join(', ')}. ` +
+          `Not one call in the sessions on this machine that carried ${sorted.length === 1 ? 'it' : 'them'}.`,
+        saves: tokens,
+        fix: 'context-tax fix adds each to permissions.deny, which takes it out of what is sent',
+        actions: sorted.map((one) =>
+          denyTool(one.tool, one.tokens, `has not been used in ${plural(one.over, 'session')} on this machine`),
+        ),
+      });
+    }
+
+    for (const line of LEVEL_LINES) {
+      const sorted = byWeight(usedTools.filter((one) => one.level === line.level));
+      if (sorted.length === 0) continue;
+      const tokens = sorted.reduce((sum, one) => sum + one.tokens, 0);
+      for (const one of sorted) {
+        levelActions[line.level].push(
+          denyTool(one.tool, one.tokens, `was used in ${one.used} of ${plural(one.over, 'session')} on this machine`),
+        );
+      }
+      findings.push({
+        headline:
+          `${sorted.length} of Claude Code's own tools ${sorted.length === 1 ? 'is' : 'are'} ` +
+          `${tokens.toLocaleString('en-US')} tokens and used in ${line.words}`,
+        detail: sorted
+          .map((one) => `${one.tool} ${one.tokens.toLocaleString('en-US')}, ${one.used} of ${one.over} (${job(one.tool)})`)
+          .join('; '),
+        // 🚨 Not counted as recoverable. Each of these takes away something you have used, so the
+        // default `fix` never writes them, and a headline number only a stronger level can deliver
+        // is the promise-versus-fix gap this tool once shipped with.
+        saves: null,
+        fix:
+          `context-tax fix --level ${line.level} denies them, for ${tokens.toLocaleString('en-US')} fewer tokens on every turn. ` +
+          'Each stops working until you take its rule out of permissions.deny',
+        actions: [],
+      });
+    }
+
+    const pluginOf = new Map(
+      config.agents.flatMap((agent) =>
+        agent.plugin === null ? [] : [[`${agent.plugin.split('@')[0]}:${agent.name}`, agent.plugin] as [string, string]],
+      ),
+    );
+    const unusedAgents: { type: string; tokens: number; over: number }[] = [];
+    for (const [type, chars] of Object.entries(record.agentChars ?? {})) {
+      if ((record.builtInAgents ?? []).includes(type)) continue;
+      const calls = agentUses(type);
+      const carried = people.filter((one) => one.record?.agentChars?.[type] !== undefined).length;
+      if (calls > 0 || carried < minSessions) continue;
+      // An idle plugin's agents leave with the plugin, which is already offered whole.
+      const plugin = pluginOf.get(type);
+      if (plugin !== undefined && pluginIsIdle(plugin)) continue;
+      unusedAgents.push({ type, tokens: toTokens(chars), over: carried });
+    }
+    if (unusedAgents.length > 0) {
+      const sorted = byWeight(unusedAgents);
+      const tokens = sorted.reduce((sum, one) => sum + one.tokens, 0);
+      findings.push({
+        headline: `${plural(sorted.length, 'agent')} ${sorted.length === 1 ? 'has' : 'have'} never been called: ${tokens.toLocaleString('en-US')} tokens`,
+        detail:
+          `${sorted.map((one) => `${one.type} ${one.tokens.toLocaleString('en-US')}`).join(', ')}. ` +
+          'The agent listing has no cap, so each one taken out is that many tokens gone.',
+        saves: tokens,
+        fix: 'context-tax fix adds Agent(<name>) to permissions.deny for each',
+        actions: sorted.map((one) => ({
+          kind: 'deny',
+          rule: `Agent(${one.type})`,
+          settingsPath: config.settingsTarget,
+          why:
+            `${one.type} is ${one.tokens.toLocaleString('en-US')} tokens of every turn and has not been called in ` +
+            `${plural(one.over, 'session')} on this machine. Denied, it cannot be called until the rule is taken out.`,
+          saves: one.tokens,
+        })),
+      });
+    }
+  }
 
   const memoryTokens = record?.instructions == null ? measure.memory.tokens : toTokens(record.instructions.chars);
   rows.push({
@@ -1325,7 +1602,8 @@ export function buildLedger(
         `its ${plural(record.builtinTools.items, 'tool')}`,
         record.builtinTools.chars,
         'client',
-        itsOwn,
+        // Not `itsOwn`: a permissions.deny rule takes one of these out, and the findings price each.
+        'sent by Claude Code itself on every turn. A permissions.deny rule takes one out of what is sent',
         'tools',
         record.builtinTools.items,
       );
@@ -1342,6 +1620,29 @@ export function buildLedger(
   const attributed = rows.reduce((sum, row) => sum + (row.tokens ?? 0), 0);
   const overAttributed = total !== null && attributed > total;
 
+  /**
+   * 🔑 The proof, and the only number on this screen that is not a model of what a fix would do.
+   *
+   * The same exact first-request median as the total, taken on each side of the last `fix`. It says
+   * nothing until a session has started since, because a settings file changes the next session
+   * and never the one that is open.
+   */
+  const sinceFix: SinceFix | null = (() => {
+    const at = options.lastFix == null ? Number.NaN : Date.parse(options.lastFix);
+    if (Number.isNaN(at)) return null;
+    const billed = started.filter((one) => one.coldStartTokens !== null && one.firstSeen !== null);
+    const before = billed.filter((one) => Date.parse(one.firstSeen ?? '') < at).slice(0, windowSize);
+    const after = billed.filter((one) => Date.parse(one.firstSeen ?? '') >= at).slice(0, windowSize);
+    if (before.length === 0) return null;
+    return {
+      day: new Date(at).toISOString().slice(0, 10),
+      before: median(before.map((one) => one.coldStartTokens ?? 0)) ?? 0,
+      beforeSessions: before.length,
+      after: median(after.map((one) => one.coldStartTokens ?? 0)),
+      afterSessions: after.length,
+    };
+  })();
+
   return {
     cwd: config.cwd,
     source:
@@ -1356,6 +1657,8 @@ export function buildLedger(
         ? null
         : { dropped: sentListing.dropped.length, listed: sentListing.entries },
     actions: mergeActions(findings.flatMap((finding) => finding.actions)),
+    levelActions,
+    sinceFix,
     machine: machineTotals(evidence, allSessions),
     reconciliation: {
       total,
@@ -1405,5 +1708,6 @@ export type {
   MachineEvidence,
   Reconciliation,
   RowKind,
+  SinceFix,
   Verdict,
 } from './types.js';

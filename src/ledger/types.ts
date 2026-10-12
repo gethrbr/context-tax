@@ -227,6 +227,32 @@ export interface ListingBudgetOffer {
   settingsPath: string;
 }
 
+/**
+ * The exact first-request median on each side of the last `fix`.
+ *
+ * `after` is `null` until a session has started since: a settings file changes the next session,
+ * never the one that is open, and an empty side printed as zero would read as a saving.
+ */
+export interface SinceFix {
+  day: string;
+  before: number;
+  beforeSessions: number;
+  after: number | null;
+  afterSessions: number;
+}
+
+/**
+ * How much `fix` takes away, picked by the person running it. Each level adds to the one before.
+ *
+ * - `safe`: what you do not use. The default, and all a run that picked no level can write.
+ * - `lean`: also Claude Code's own tools and the plugins you use in under 1 session in 20.
+ * - `max`: also the ones you use in under 1 session in 5.
+ */
+export type FixLevel = 'safe' | 'lean' | 'max';
+
+/** The levels that take away something you have used. */
+export type StrongerLevel = Exclude<FixLevel, 'safe'>;
+
 export interface Ledger {
   cwd: string;
   source: LedgerSource;
@@ -242,8 +268,15 @@ export interface Ledger {
    * same thing in a sentence; this is the pair of numbers behind it, for the receipt and `--json`.
    */
   neverReceived: { dropped: number; listed: number } | null;
-  /** Every finding's actions, merged. `fix` reads this and nothing else. */
+  /** Every finding's actions, merged. `fix` at the `safe` level, the default, writes these and no more. */
   actions: FixAction[];
+  /**
+   * What each stronger level adds, on top of the level before it. Kept out of `actions` so no run
+   * that did not pick a level can write one: each takes away something that has been used.
+   */
+  levelActions: Record<StrongerLevel, FixAction[]>;
+  /** First request before and after the last `fix` under this tree. `null` when there was none. */
+  sinceFix: SinceFix | null;
   reconciliation: Reconciliation;
   machine: MachineEvidence;
   rows: LedgerRow[];

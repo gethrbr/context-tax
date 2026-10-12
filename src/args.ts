@@ -14,6 +14,9 @@
  * itself.
  */
 
+import { FIX_LEVELS } from './fix/levels.js';
+import type { FixLevel } from './ledger/types.js';
+
 export interface Args {
   command: string;
   json: boolean;
@@ -28,6 +31,11 @@ export interface Args {
   yes: boolean;
   /** `fix`: also raise the skill listing budget. Costs tokens, so it is never the default. */
   restoreDescriptions: boolean;
+  /**
+   * `fix`: how much to take away. Left out, a terminal is asked and anything else gets `safe`, so no
+   * run writes a change to something you use without somebody having picked it.
+   */
+  level?: FixLevel;
   /** `session`: write the picture to this file as an SVG. */
   svg?: string;
   /** `session <id>`: which one, by the start of its id. The longest session here when left out. */
@@ -61,6 +69,7 @@ export const KNOWN_FLAGS = [
   '--yes',
   '-y',
   '--restore-descriptions',
+  '--level',
   '--svg',
 ] as const;
 
@@ -90,6 +99,11 @@ export const HELP = `
     --restore-descriptions
                     fix: also raise the skill listing budget so every skill
                     description is sent. It costs tokens, so it is never the default
+    --level <safe|lean|max>
+                    fix: how much to switch off. safe, the default, is what you
+                    do not use. lean also takes Claude Code's own tools and the
+                    plugins you use in under 1 session in 20, max the ones under
+                    1 in 5. A terminal is asked when this is left out
     --svg <file>    session: write the picture as an image you can post
 
   No telemetry, no model call, and no context-tax server for anything to be sent
@@ -183,6 +197,15 @@ export function parseArgs(argv: string[]): Args {
       case '--restore-descriptions':
         args.restoreDescriptions = true;
         break;
+      case '--level': {
+        const raw = valueAfter(i, arg);
+        if (raw === undefined) break;
+        i += 1;
+        const level = FIX_LEVELS.find((one) => one === raw);
+        if (level === undefined) usageErrors.push(`--level is one of ${FIX_LEVELS.join(', ')}, not ${JSON.stringify(raw)}.`);
+        else args.level = level;
+        break;
+      }
       case '--svg': {
         const raw = valueAfter(i, arg);
         if (raw === undefined) break;
