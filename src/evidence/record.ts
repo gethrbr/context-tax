@@ -97,6 +97,9 @@ export interface RecordAccumulator {
   sessionDetails: SentPart | null;
   systemPrompt: SentPart | null;
   builtinTools: SentPart | null;
+  builtinToolChars: Map<string, number>;
+  agentChars: Map<string, number>;
+  builtInAgents: string[];
 }
 
 export function newRecordAccumulator(): RecordAccumulator {
@@ -116,6 +119,9 @@ export function newRecordAccumulator(): RecordAccumulator {
     sessionDetails: null,
     systemPrompt: null,
     builtinTools: null,
+    builtinToolChars: new Map(),
+    agentChars: new Map(),
+    builtInAgents: [],
   };
 }
 
@@ -227,6 +233,14 @@ function recordAgents(acc: RecordAccumulator, attachment: Record<string, unknown
     chars: sent ?? lines.reduce((sum, line) => sum + line.length + 1, 0),
     items: lines.length,
   };
+  // `addedTypes` runs beside `addedLines`, one name per line, and the name is the one `Agent` is
+  // called with, which is also the one a `permissions.deny` rule takes. A client that wrote one list
+  // without the other is not guessed at: the agents just go unsized.
+  const types = strings(attachment.addedTypes);
+  if (types.length === lines.length) {
+    types.forEach((type, index) => acc.agentChars.set(type, lines[index].length + 1));
+  }
+  acc.builtInAgents = strings(attachment.builtInTypes);
 }
 
 function recordToolList(acc: RecordAccumulator, attachment: Record<string, unknown>, sent: number | null): void {
@@ -296,6 +310,7 @@ function recordSnapshot(acc: RecordAccumulator, attachment: Record<string, unkno
     const mcp = parseMcpToolName(name);
     if (mcp === null) {
       own = { chars: own.chars + chars, items: own.items + 1 };
+      acc.builtinToolChars.set(name, chars);
       continue;
     }
     const held = acc.serverSchemas.get(mcp.server) ?? { tools: 0, chars: 0 };
@@ -384,6 +399,9 @@ export function finalizeRecord(acc: RecordAccumulator): SentRecord | null {
     sessionDetails: acc.sessionDetails,
     systemPrompt: acc.systemPrompt,
     builtinTools: acc.builtinTools,
+    builtinToolChars: Object.fromEntries(acc.builtinToolChars),
+    agentChars: Object.fromEntries(acc.agentChars),
+    builtInAgents: acc.builtInAgents,
   };
 
   const empty =

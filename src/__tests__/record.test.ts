@@ -147,6 +147,30 @@ describe('what a session sent', () => {
     expect(record?.agents).toEqual({ chars: 40, items: 2 });
   });
 
+  it('sizes each agent by the name it is called with, and keeps the client\u2019s own apart', async () => {
+    const { evidence } = await scanLines([
+      attachment({
+        type: 'agent_listing_delta',
+        addedTypes: ['kit:reviewer', 'Explore'],
+        addedLines: ['- kit:reviewer: reviews', '- Explore: explores'],
+        builtInTypes: ['Explore'],
+        isInitial: true,
+      }),
+      reply('m1', 50_000),
+    ]);
+    const record = evidence.sessions[0].record;
+    expect(record?.agentChars).toEqual({ 'kit:reviewer': 24, Explore: 20 });
+    expect(record?.builtInAgents).toEqual(['Explore']);
+  });
+
+  it('does not guess which line is which agent when the two lists disagree in length', async () => {
+    const { evidence } = await scanLines([
+      attachment({ type: 'agent_listing_delta', addedTypes: ['a'], addedLines: ['- a: one', '- b: two'], isInitial: true }),
+      reply('m1', 50_000),
+    ]);
+    expect(evidence.sessions[0].record?.agentChars).toEqual({});
+  });
+
   it('falls back to the fields, and says so, for a client that did not record the text as sent', async () => {
     const { evidence } = await scanLines([
       attachment({ type: 'skill_listing', content: LISTING, skillCount: 4, isInitial: true, names: LISTING_NAMES }),
@@ -224,6 +248,8 @@ describe('what a session sent', () => {
     const record = evidence.sessions[0].record;
     expect(record?.systemPrompt).toEqual({ chars: 1_500, items: 2 });
     expect(record?.builtinTools).toEqual({ chars: size(tools[0]) + size(tools[1]), items: 2 });
+    // One at a time too, which is what makes a single tool a lever. The MCP tool is not one of them.
+    expect(record?.builtinToolChars).toEqual({ Bash: size(tools[0]), Read: size(tools[1]) });
     // Loaded up front rather than deferred, so its schema is already in the prompt.
     expect(record?.servers.acme).toMatchObject({ tools: 1, schemaChars: size(tools[2]) });
   });

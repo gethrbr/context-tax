@@ -24,6 +24,13 @@ export type FileAction =
   | { kind: 'disable-plugin'; plugin: string }
   | { kind: 'skill-override'; skill: string; value: SkillOverride }
   /**
+   * A `permissions.deny` rule: `Workflow` for one of the client's own tools, `Agent(name)` for an
+   * agent. A denied tool or agent is not sent at all, which is what makes this a saving and not a
+   * preference. It is also a hard stop: the model cannot reach it until the rule is removed, so
+   * every one of these says what stops working.
+   */
+  | { kind: 'deny'; rule: string }
+  /**
    * Raise `skillListingBudgetFraction` so every skill description is sent again.
    *
    * 🚨 The only action that **adds** to every turn, which is why it is never in the list `fix`
@@ -77,6 +84,8 @@ export function actionKey(action: FixAction): string {
       return `plugin:${action.plugin}`;
     case 'skill-override':
       return `skill:${action.skill}`;
+    case 'deny':
+      return `deny:${action.rule}`;
     case 'listing-budget':
       return 'listing-budget';
     case 'manual':

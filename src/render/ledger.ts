@@ -253,6 +253,33 @@ function headline(ledger: Ledger): string {
 }
 
 /**
+ * What the last `fix` did, measured: the same exact median on each side of it.
+ *
+ * 🔑 Every other saving on this screen is a model of what an edit would do. This one is what the
+ * client billed, so it is printed in sessions and not as a percentage of anything, and it waits for
+ * a session that started after the fix rather than predicting one.
+ */
+function sinceFixLine(ledger: Ledger): string | null {
+  const since = ledger.sinceFix;
+  if (since === null) return null;
+  if (since.after === null) {
+    return `context-tax fix ran here on ${since.day}. Start a session and run this again to see what it changed.`;
+  }
+  const change = since.before - since.after;
+  const moved =
+    change > 0
+      ? `${n(change)} fewer`
+      : change < 0
+        ? `${n(-change)} more`
+        : 'no change';
+  return (
+    `Since context-tax fix on ${since.day}: ${n(since.before)} tokens on the first request before, ` +
+    `${n(since.after)} after, ${moved} (median of ${since.beforeSessions} session${since.beforeSessions === 1 ? '' : 's'} ` +
+    `before and ${since.afterSessions} after).`
+  );
+}
+
+/**
  * Nothing was found, as opposed to nothing being expensive.
  *
  * 🔑 These are not the same screen and printing the first as the second is how a stranger's
@@ -331,6 +358,8 @@ export function renderLedger(ledger: Ledger, colour: Palette, width = screenWidt
   say(machineLine(ledger.machine), 2, colour.dim);
   line();
   say(headline(ledger), 2, colour.bold);
+  const fixed = sinceFixLine(ledger);
+  if (fixed !== null) say(fixed, 2, colour.green);
 
   /* ---------------------------------------------------------------------------------------- */
 

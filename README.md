@@ -78,7 +78,7 @@ anything to be sent to.
   You typed /clear 118, /compact 31.
 
   40,000 tokens on every turn, 20% of a window of about 200,000, before you type
-  a word. 1,900 of them are recoverable from the 7 findings below.
+  a word. 1,900 of them are recoverable from the 8 findings below.
 
   ┌───────────────────────┬──────────┬───────────┬────────┬────────┬───────────┐
   │ MCP SERVERS           │   tokens │  deferred │  share │  calls │  per call │
@@ -113,9 +113,10 @@ anything to be sent to.
       can say which lines were used
     your hooks: what your hooks put in front of the first turn. A hook that
       adds context on every prompt adds this much again each time
-    its 14 tools, its system prompt, its tool name list, its session details:
-      sent by Claude Code itself on every turn, so there is nothing here to
-      switch off
+    its 14 tools: sent by Claude Code itself on every turn. A permissions.deny
+      rule takes one out of what is sent
+    its system prompt, its tool name list, its session details: sent by Claude
+      Code itself on every turn, so there is nothing here to switch off
     EVERY TURN is exact, from usage. Median first request across your 10 most
     recent sessions, 2026-08-24 to 2026-09-01.
     Rows are what your session of 2026-09-01 sent, read from its transcript. A
@@ -173,6 +174,13 @@ anything to be sent to.
        commit-helper, db-migrate, ...
        fix: set each to off in skillOverrides, or delete the ones you do not
        recognise
+    8. 2 of Claude Code's own tools are 4,300 tokens and used in under 1 session
+       in 20
+       Workflow 2,300, 2 of 96 (multi-agent workflows); ScheduleWakeup 2,000, 1
+       of 96 (/loop without an interval)
+       fix: context-tax fix --level lean denies them, for 4,300 fewer tokens on
+       every turn. Each stops working until you take its rule out of
+       permissions.deny
 
   NOT MEASURABLE HERE
     Your memory and instruction files are 1,600 tokens of every turn. This tool
@@ -219,10 +227,13 @@ A connector attached to a claude.ai account is real context, and no config file 
 row here because the session sent it. There is nothing for `fix` to edit, so the finding says where
 it is switched off instead.
 
-**`CLAUDE CODE ITSELF` is the part you cannot switch off.**
+**`CLAUDE CODE ITSELF` is mostly the part you cannot switch off.**
 The client's own tools and system prompt are usually the largest lines on the screen. They are
 itemised so the rows above them read in proportion: on the invented machine above, every MCP server
-together is about an eighth of what the built-in tools weigh.
+together is about an eighth of what the built-in tools weigh. The tools are the exception: a
+`permissions.deny` rule naming one takes it out of what is sent, and some of them are large. On one
+real machine a single tool was 11,402 tokens of a 47,700-token first request, measured by running an
+interactive session with and without the rule. Finding 8 above prices each one you rarely use.
 
 **`unattributed` is the honest remainder.**
 The total is exact, from `usage`. The rows are measured on text, and tokens are estimated from
@@ -344,6 +355,7 @@ The report is the easy half. This is the half that changes something.
 ```bash
 npx context-tax fix --dry-run                  # show every line that would change, then stop
 npx context-tax fix                            # show it, ask, then write
+npx context-tax fix --rare                     # also switch off tools and plugins you rarely use
 npx context-tax fix --restore-descriptions     # also raise the skill listing budget
 ```
 
@@ -446,6 +458,10 @@ while looking like it worked.
 | `~/.claude.json` | **prints `claude mcp remove <name> -s <scope>` for you to run** |
 | a plugin | sets `enabledPlugins["<plugin>@<marketplace>"]: false`, scoped to this project |
 | a skill | writes `off`, or `user-invocable-only` when you type it and the model never picks it |
+| one of Claude Code's own tools you have never used | adds it to `permissions.deny` in `.claude/settings.local.json` |
+| an agent that has never been called | adds `Agent(<name>)` to `permissions.deny`. The agent listing has no cap, so this saving is real |
+| a tool or a plugin used in under 1 session in 20 | denies the tool or switches the plugin off at the `lean` level, and only if you pick it |
+| a tool or a plugin used in under 1 session in 5 | the same at the `max` level |
 | a claude.ai connector, or anything else no file declares | **says where it is switched off**, because there is no file here to edit |
 | skills sent with no description | `--restore-descriptions` sets `skillListingBudgetFraction`, and only when you pass it |
 
@@ -468,6 +484,13 @@ every measuring command caches what your servers answered under `~/.cache/contex
 - **Never raises your per-turn cost unasked.** `--restore-descriptions` is the one change that adds
   tokens, so it is off unless you name it, it prints what it adds, and it never lowers a budget you
   have already set higher
+- **Never takes away something you have used, unasked.** A deny rule for a tool you have called,
+  or switching off a plugin you have used, is written only at a level you pick. In a terminal `fix`
+  shows each level with what it recovers and asks; anything else gets `safe` unless `--level` says
+  otherwise. Each line says what stops working
+- **Proves what it did.** After a fix, the report's first lines give your first request before and
+  after it, the same exact median on each side, once a session has started since. It is the one
+  number on the screen that is not a model of what an edit would do
 - **Never touches `~/.claude.json`.** That file sits beside your API keys and bearer tokens. It is
   not rewritten and not backed up either, because a backup would be a second copy of every
   credential on your machine
@@ -500,6 +523,7 @@ context-tax evidence    what your sessions actually used
 | `--dry-run` | `fix`: show the diff and stop |
 | `--yes`, `-y` | `fix`: skip the confirmation |
 | `--restore-descriptions` | `fix`: also raise the skill listing budget so every description is sent |
+| `--level <safe\|lean\|max>` | `fix`: how much to switch off. `safe` (the default) is what you do not use; `lean` adds Claude Code's own tools and the plugins you use in under 1 session in 20; `max` adds the ones under 1 in 5. A terminal is asked when this is left out |
 | `--svg <file>` | `session`: write the picture as an SVG |
 | `--no-color` | plain text (`NO_COLOR` is honoured too) |
 

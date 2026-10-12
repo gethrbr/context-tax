@@ -419,6 +419,17 @@ describe('mcp servers', () => {
     expect(config.mcpServers.map((server) => server.name)).toEqual(['plugin:one:dup', 'plugin:three:dup', 'plugin:two:dup']);
   });
 
+  it('reads the events a plugin runs hooks on', async () => {
+    const installPath = join(root, 'plugins', 'thing');
+    await write(join(installPath, 'hooks', 'hooks.json'), { hooks: { SessionEnd: [], PreToolUse: [] } });
+    await write(join(home, '.claude', 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'thing@market': [{ scope: 'user', installPath, installedAt: '2026-01-02T00:00:00Z' }] },
+    });
+    const { config } = await resolve();
+    expect(config.plugins.find((plugin) => plugin.id === 'thing@market')?.hooks).toEqual(['SessionEnd', 'PreToolUse']);
+  });
+
   it('counts a name declared twice once, and says where the other one is', async () => {
     await write(join(repo, '.mcp.json'), { mcpServers: { dup: { command: 'from-project' } } });
     await write(join(home, '.claude.json'), { mcpServers: { dup: { command: 'from-user' } } });
@@ -550,6 +561,7 @@ describe('sessionsSince', () => {
       firstSeen,
       lastSeen: firstSeen,
       record: null,
+      builtinToolCalls: {},
     }) satisfies SessionEvidence;
 
   it('counts only sessions that started after the config did', () => {

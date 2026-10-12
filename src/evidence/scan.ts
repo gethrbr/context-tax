@@ -171,6 +171,7 @@ async function scanFile(
       firstSeen: null,
       lastSeen: null,
       record: null,
+      builtinToolCalls: {},
     },
     mcpServers: new Map(),
     builtinTools: new Map(),
@@ -278,6 +279,7 @@ async function scanFile(
   }
 
   if (sent !== null) acc.session.record = finalizeRecord(sent);
+  acc.session.builtinToolCalls = Object.fromEntries(acc.builtinTools);
   return { acc, malformed };
 }
 

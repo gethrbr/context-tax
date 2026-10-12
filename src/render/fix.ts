@@ -13,8 +13,11 @@
 
 import type { AppliedFile, FixPlan, ManualAction, SettingsAction } from '../fix/types.js';
 import { unifiedDiff } from '../fix/diff.js';
+import { FIX_LEVELS, LEVEL_MEANS } from '../fix/levels.js';
+import type { LevelOffer } from '../fix/levels.js';
+import type { FixLevel } from '../ledger/types.js';
 import type { Palette } from './color.js';
-import { screenWidth, shortPath, wrapClamped } from './layout.js';
+import { screenWidth, shortPath, wrapClamped, wrapText } from './layout.js';
 
 const n = (value: number): string => value.toLocaleString('en-US');
 
@@ -26,6 +29,12 @@ function actionLine(action: SettingsAction): string {
       return `switch off the ${action.plugin} plugin`;
     case 'skill-override':
       return `set the ${action.skill} skill to ${action.value}`;
+    case 'deny': {
+      const agent = /^Agent\((.+)\)$/.exec(action.rule);
+      return agent === null
+        ? `switch off Claude Code's ${action.rule} tool`
+        : `switch off the ${agent[1]} agent`;
+    }
     case 'listing-budget':
       return `raise the skill listing budget to ${action.fraction} of the window`;
   }
@@ -187,4 +196,65 @@ export function renderApplied(
     )}`,
   );
   return `${out.join('\n')}\n`;
+}
+
+/**
+ * Names on at most two lines, the rest counted. Ten agents spelled out would push the next level
+ * off the screen the person is choosing from.
+ */
+function nameLines(names: string[], width: number): string[] {
+  if (names.length === 0) return [];
+  for (let kept = names.length; kept > 0; kept -= 1) {
+    const rest = names.length - kept;
+    const text = `+ ${names.slice(0, kept).join(', ')}${rest === 0 ? '' : `, and ${rest} more`}`;
+    const lines = wrapText(text, width);
+    if (lines.length <= 2) return lines;
+  }
+  return [`+ ${names.length} changes`];
+}
+
+/**
+ * The levels `fix` can work at. As a numbered menu for a terminal to pick from; with `asFlags`, the
+ * levels above the one that ran, as the flags that would run them, for a run that did not ask.
+ *
+ * 🔑 Each row's number is everything that level would recover, not what it adds, because the
+ * question being answered is "what do I get if I pick this one".
+ */
+export function renderLevels(
+  offers: LevelOffer[],
+  colour: Palette,
+  options: { asFlags: boolean; above?: FixLevel },
+  width = screenWidth(),
+): string {
+  const shown = options.above === undefined
+    ? offers
+    : offers.filter((offer) => FIX_LEVELS.indexOf(offer.level) > FIX_LEVELS.indexOf(options.above ?? 'safe'));
+  const label = (offer: LevelOffer, index: number): string =>
+    options.asFlags ? `--level ${offer.level}` : `${index + 1}  ${offer.level}`;
+  const labelWidth = Math.max(...shown.map((offer, index) => label(offer, index).length));
+  const amounts = shown.map((offer) => (offer.changes === 0 ? 'no change' : `${n(offer.saves)} tokens`));
+  const amountWidth = Math.max(...amounts.map((amount) => amount.length));
+  // Under the words, not the number: the names say what the words mean on this machine.
+  const indent = 4 + labelWidth + 2 + amountWidth + 2;
+
+  const out: string[] = [''];
+  out.push(
+    options.asFlags
+      ? `  ${colour.bold('STRONGER LEVELS')} ${colour.dim('each takes away something you have used')}`
+      : `  ${colour.bold('HOW MUCH TO SWITCH OFF')}`,
+  );
+  out.push('');
+  shown.forEach((offer, index) => {
+    out.push(
+      `    ${colour.bold(label(offer, index).padEnd(labelWidth))}  ${amounts[index].padStart(amountWidth)}  ` +
+        colour.dim(LEVEL_MEANS[offer.level]),
+    );
+    // A wrapped line hangs under the first name, so the `+` marks where each level's list starts.
+    nameLines(offer.adds, width - indent - 2).forEach((text, line) => {
+      out.push(' '.repeat(line === 0 ? indent : indent + 2) + colour.yellow(text));
+    });
+  });
+  out.push('');
+  if (!options.asFlags) out.push(`  ${colour.dim('Every change is shown, with what stops working, before anything is written.')}`, '');
+  return out.join('\n');
 }

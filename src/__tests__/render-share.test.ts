@@ -31,7 +31,7 @@ describe('the first line', () => {
     const screen = renderLedger(readmeLedger(), plain, 100).replace(/\s+/g, ' ');
     expect(screen).toContain(
       '40,000 tokens on every turn, 20% of a window of about 200,000, before you type a word. ' +
-        '1,900 of them are recoverable from the 7 findings below.',
+        '1,900 of them are recoverable from the 8 findings below.',
     );
   });
 

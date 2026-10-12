@@ -136,6 +136,19 @@ describe('parseArgs', () => {
     expect(parseArgs(['fix', '--restore-descriptions']).restoreDescriptions).toBe(true);
   });
 
+  /** 🚨 No level picked is not `safe` here: it is a question for a terminal, and `safe` for anything else. */
+  it('leaves the level unpicked unless --level names one', () => {
+    expect(parseArgs(['fix', '--yes']).level).toBeUndefined();
+    expect(parseArgs(['fix', '--level', 'lean']).level).toBe('lean');
+    expect(parseArgs(['fix', '--level', 'max']).level).toBe('max');
+  });
+
+  it('refuses a level that does not exist rather than falling back to one', () => {
+    expect(parseArgs(['fix', '--level', 'rare']).usageErrors).toEqual(['--level is one of safe, lean, max, not "rare".']);
+    expect(parseArgs(['fix', '--level', 'rare']).level).toBeUndefined();
+    expect(parseArgs(['fix', '--level']).usageErrors).toEqual(['--level needs a value.']);
+  });
+
   it('reads the boolean flags', () => {
     const args = parseArgs(['fix', '--json', '--no-color', '--no-spawn', '--refresh', '--dry-run', '-y']);
     expect(args).toMatchObject({

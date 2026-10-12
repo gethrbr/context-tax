@@ -27,12 +27,15 @@ import { PACKAGE_VERSION } from './version.js';
 import { HELP, parseArgs } from './args.js';
 import { scanEvidence } from './evidence/index.js';
 import { readSessionSeries } from './evidence/series.js';
-import { ApplyError, applyFixes, planFixes } from './fix/index.js';
+import { ApplyError, applyFixes, lastFixUnder, planFixes } from './fix/index.js';
+import { FIX_LEVELS, actionsAt, asksForLevel, levelOffers } from './fix/levels.js';
+import type { LevelOffer } from './fix/levels.js';
 import { buildLedger } from './ledger/index.js';
 import { measureContext } from './measure/index.js';
 import { colourEnabled, palette } from './render/color.js';
+import type { Palette } from './render/color.js';
 import { renderConfig } from './render/config.js';
-import { renderApplied, renderPlan } from './render/fix.js';
+import { renderApplied, renderLevels, renderPlan } from './render/fix.js';
 import { hangingText, screenWidth } from './render/layout.js';
 import { progress, startedLine, startingLabel } from './render/progress.js';
 import { renderLedger } from './render/ledger.js';
@@ -44,8 +47,8 @@ import { fsFault } from './resolve/read.js';
 import { trustsProjectServers } from './trust.js';
 
 import type { Args } from './args.js';
-import type { AppliedFile } from './fix/types.js';
-import type { Ledger } from './ledger/types.js';
+import type { AppliedFile, FixAction, FixPlan } from './fix/types.js';
+import type { FixLevel, Ledger } from './ledger/types.js';
 
 
 async function config(args: Args): Promise<void> {
@@ -107,7 +110,9 @@ async function buildAll(args: Args): Promise<Ledger> {
     ]);
 
     spinner.set('joining what it costs against what you called');
-    return buildLedger(resolvedResult, measured, evidence, { window: args.window });
+    const { config } = resolvedResult;
+    const lastFix = await lastFixUnder(config.repoRoot ?? config.cwd);
+    return buildLedger(resolvedResult, measured, evidence, { window: args.window, lastFix });
   } finally {
     // 🔒 In `finally`, so a thrown error cannot leave a spinner frame sitting on the line the
     // error message is about to be written to.
@@ -128,12 +133,41 @@ async function ledger(args: Args): Promise<void> {
   if (built.reconciliation.overAttributed) process.exitCode = 1;
 }
 
+/** One question to the terminal, and its answer trimmed. */
+async function askTerminal(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(question)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Asks which level to work at until the answer is one, by number or by name. Enter is the first,
+ * `safe`: a person who presses it without reading has picked the level that takes nothing they use.
+ */
+async function pickLevel(offers: LevelOffer[], colour: Palette): Promise<FixLevel> {
+  process.stdout.write(`${renderLevels(offers, colour, { asFlags: false })}\n`);
+  for (;;) {
+    const answer = (await askTerminal(`  Level [1-${offers.length}, Enter for 1]: `)).toLowerCase();
+    if (answer === '') return offers[0].level;
+    const byNumber = offers[Number(answer) - 1];
+    const picked = /^\d+$/.test(answer) && byNumber !== undefined ? byNumber : offers.find((one) => one.level === answer);
+    if (picked !== undefined) return picked.level;
+    process.stdout.write(`  ${colour.dim(`Pick a number from 1 to ${offers.length}, or a level's name.`)}\n`);
+  }
+}
+
 /**
  * `context-tax fix` — execute the ledger's recommendations.
  *
  * The order is fixed and none of it is optional: build the same ledger the default command prints,
- * plan the edits without touching disk, show every changed line, then ask. `--dry-run` stops before
- * the question; `--yes` answers it; **nothing else writes**.
+ * pick a level, plan the edits without touching disk, show every changed line, then ask.
+ * `--dry-run` stops before the question; `--yes` answers it; **nothing else writes**.
+ *
+ * 🔑 The level is the person's call. Left out, a terminal is shown each level with what it would
+ * recover and asked; anything that cannot be asked gets `safe`, the level that takes nothing used.
  *
  * 🚨 A non-interactive run without `--yes` refuses rather than assuming consent. A CLI that writes
  * to a config file because it could not find a terminal to ask is a CLI that writes to config files
@@ -142,7 +176,7 @@ async function ledger(args: Args): Promise<void> {
 async function fix(args: Args): Promise<void> {
   const colour = palette(colourEnabled(args.color));
   const built = await buildAll(args);
-  const actions = [...built.actions];
+  const extra: FixAction[] = [];
   let nothingToRestore = false;
   if (args.restoreDescriptions) {
     // 🚨 The one edit that adds to every turn. It is built here, from the flag, and never inside
@@ -150,7 +184,7 @@ async function fix(args: Args): Promise<void> {
     const offer = built.listingBudget;
     if (offer === null) nothingToRestore = true;
     else {
-      actions.push({
+      extra.push({
         kind: 'listing-budget',
         fraction: offer.fraction,
         adds: offer.addsTokens,
@@ -163,7 +197,16 @@ async function fix(args: Args): Promise<void> {
       });
     }
   }
-  const plan = await planFixes(actions);
+  // 🚨 The same rule as the listing budget: changes to things you have used come from a level the
+  // person picked and never from the ledger's own list, so no run that did not pick one writes one.
+  // Every level is planned, which reads but never writes, so the menu prices what is really left to
+  // do rather than what the ledger would have done to a machine with nothing applied yet.
+  const planAt = (level: FixLevel): Promise<FixPlan> => planFixes([...actionsAt(built, level), ...extra]);
+  const plans: Record<FixLevel, FixPlan> = { safe: await planAt('safe'), lean: await planAt('lean'), max: await planAt('max') };
+  const offers = levelOffers(plans);
+  const asks = asksForLevel(args, process.stdin.isTTY === true, offers.length);
+  const level = asks ? await pickLevel(offers, colour) : (args.level ?? 'safe');
+  const plan = plans[level];
 
   if (args.json) {
     // 🔒 The plan without the file bodies. `before` and `after` are whole settings files, and a
@@ -174,6 +217,7 @@ async function fix(args: Args): Promise<void> {
     process.stdout.write(
       `${JSON.stringify(
         {
+          level,
           ...plan,
           edits: plan.edits.map((edit) => ({
             path: edit.path,
@@ -189,6 +233,11 @@ async function fix(args: Args): Promise<void> {
   }
 
   process.stdout.write(`${renderPlan(plan, colour)}\n`);
+  // A run that did not show the menu still says what the stronger levels would add, as the flags
+  // that would run them. One that showed it has just been told.
+  if (!asks && offers.some((offer) => FIX_LEVELS.indexOf(offer.level) > FIX_LEVELS.indexOf(level))) {
+    process.stdout.write(`${renderLevels(offers, colour, { asFlags: true, above: level })}\n`);
+  }
   if (nothingToRestore) {
     process.stdout.write(
       `  ${colour.dim('--restore-descriptions: no session here shows a skill losing its description to the')}\n` +
